@@ -156,6 +156,25 @@ async def scan_target(request: Request, target_id: int, background_tasks: Backgr
     background_tasks.add_task(hawks_scanner.scan_target, target_id, target.domain_ip, db)
     return {"status": "started"}
 
+@app.post("/targets/{target_id}/stop-scan")
+async def stop_scan(request: Request, target_id: int, db: Session = Depends(get_db)):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    target = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    
+    # Parar o scan no scanner
+    hawks_scanner.stop_scan(target_id)
+    
+    # Atualizar status no banco
+    target.scan_status = "stopped"
+    db.commit()
+    
+    return {"status": "stopped"}
+
 @app.delete("/targets/{target_id}")
 async def delete_target(request: Request, target_id: int, db: Session = Depends(get_db)):
     user = get_current_user(request)
@@ -356,6 +375,90 @@ async def api_get_scan_results(request: Request, target_id: int, db: Session = D
         raise HTTPException(status_code=401, detail="Not authenticated")
     results = db.query(HawksScanResult).filter(HawksScanResult.target_id == target_id).all()
     return results
+
+@app.get("/targets/{target_id}/dashboard", response_class=HTMLResponse)
+async def target_dashboard(request: Request, target_id: int, db: Session = Depends(get_db)):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    
+    target = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    
+    # Buscar todos os resultados de scan para este target
+    scan_results = db.query(HawksScanResult).filter(HawksScanResult.target_id == target_id).order_by(HawksScanResult.started_at.desc()).all()
+    
+    # Agrupar resultados por tipo de scan
+    subfinder_results = [r for r in scan_results if r.scan_type == "subfinder"]
+    chaos_results = [r for r in scan_results if r.scan_type == "chaos"]
+    httpx_results = [r for r in scan_results if r.scan_type == "httpx"]
+    nuclei_results = [r for r in scan_results if r.scan_type == "nuclei"]
+    
+    # Estatísticas
+    total_subdomains = 0
+    live_hosts = 0
+    vulnerabilities = 0
+    
+    # Contar subdomínios
+    for result in subfinder_results + chaos_results:
+        if result.status == "success" and result.result_data:
+            try:
+                data = json.loads(result.result_data)
+                if "subdomains" in data:
+                    total_subdomains += len(data["subdomains"])
+            except:
+                pass
+    
+    # Contar hosts vivos
+    for result in httpx_results:
+        if result.status == "success" and result.result_data:
+            try:
+                data = json.loads(result.result_data)
+                if "live_hosts" in data:
+                    live_hosts += len(data["live_hosts"])
+            except:
+                pass
+    
+    # Contar vulnerabilidades
+    for result in nuclei_results:
+        if result.status == "success" and result.result_data:
+            try:
+                data = json.loads(result.result_data)
+                if "results" in data:
+                    vulnerabilities += len(data["results"])
+            except:
+                pass
+    
+    return templates.TemplateResponse("target_dashboard.html", {
+        "request": request,
+        "target": target,
+        "scan_results": scan_results,
+        "subfinder_results": subfinder_results,
+        "chaos_results": chaos_results,
+        "httpx_results": httpx_results,
+        "nuclei_results": nuclei_results,
+        "total_subdomains": total_subdomains,
+        "live_hosts": live_hosts,
+        "vulnerabilities": vulnerabilities
+    })
+
+@app.get("/api/targets/{target_id}/status")
+async def get_target_status(request: Request, target_id: int, db: Session = Depends(get_db)):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    target = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    
+    return {
+        "id": target.id,
+        "domain_ip": target.domain_ip,
+        "scan_status": target.scan_status,
+        "last_scan": target.last_scan.isoformat() if target.last_scan else None
+    }
 
 if __name__ == "__main__":
     import uvicorn

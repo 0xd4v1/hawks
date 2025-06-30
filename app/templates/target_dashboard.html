@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hawks - Dashboard {{ target.domain_ip }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-white">
+    <nav class="border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <h1 class="text-xl font-bold">Hawks</h1>
+                    </div>
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                        <a href="/dashboard" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Dashboard</a>
+                        <a href="/targets" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Alvos</a>
+                        <a href="/scans" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Scans</a>
+                        <a href="/templates" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Templates</a>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <a href="/logout" class="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm font-medium">Sair</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div class="px-4 py-6 sm:px-0">
+            <div class="mb-6">
+                <h2 class="text-2xl font-bold text-black">Dashboard - {{ target.domain_ip }}</h2>
+                <p class="text-gray-600">Status: 
+                    <span class="px-2 py-1 text-xs font-semibold rounded-full 
+                        {% if target.scan_status == 'running' %}bg-yellow-100 text-yellow-800
+                        {% elif target.scan_status == 'completed' %}bg-green-100 text-green-800
+                        {% elif target.scan_status == 'error' %}bg-red-100 text-red-800
+                        {% elif target.scan_status == 'stopped' %}bg-gray-100 text-gray-800
+                        {% else %}bg-gray-100 text-gray-600{% endif %}">
+                        {{ target.scan_status.title() }}
+                    </span>
+                </p>
+                {% if target.last_scan %}
+                <p class="text-sm text-gray-500">Último scan: {{ target.last_scan.strftime('%d/%m/%Y %H:%M') }}</p>
+                {% endif %}
+            </div>
+
+            <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+                <div class="bg-white overflow-hidden shadow border border-gray-200 rounded-lg">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-black rounded-full flex items-center justify-center">
+                                    <span class="text-white text-sm font-medium">{{ total_subdomains }}</span>
+                                </div>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Subdomínios</dt>
+                                    <dd class="text-lg font-medium text-black">{{ total_subdomains }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white overflow-hidden shadow border border-gray-200 rounded-lg">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center">
+                                    <span class="text-white text-sm font-medium">{{ live_hosts }}</span>
+                                </div>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Hosts Ativos</dt>
+                                    <dd class="text-lg font-medium text-black">{{ live_hosts }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white overflow-hidden shadow border border-gray-200 rounded-lg">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center">
+                                    <span class="text-white text-sm font-medium">{{ vulnerabilities }}</span>
+                                </div>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Vulnerabilidades</dt>
+                                    <dd class="text-lg font-medium text-black">{{ vulnerabilities }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white overflow-hidden shadow border border-gray-200 rounded-lg">
+                    <div class="p-5">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
+                                    <span class="text-white text-sm font-medium">{{ scan_results|length }}</span>
+                                </div>
+                            </div>
+                            <div class="ml-5 w-0 flex-1">
+                                <dl>
+                                    <dt class="text-sm font-medium text-gray-500 truncate">Total Scans</dt>
+                                    <dd class="text-lg font-medium text-black">{{ scan_results|length }}</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex space-x-4 mb-8">
+                {% if target.scan_status != 'running' %}
+                <button onclick="startScan({{ target.id }})" 
+                        class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">
+                    Iniciar Novo Scan
+                </button>
+                {% else %}
+                <button onclick="stopScan({{ target.id }})" 
+                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">
+                    Parar Scan
+                </button>
+                {% endif %}
+                <button onclick="refreshStatus()" 
+                        class="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500">
+                    Atualizar Status
+                </button>
+            </div>
+
+            <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-black">Histórico de Scans</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tipo</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Iniciado</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Finalizado</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for result in scan_results %}
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-black">{{ result.scan_type.title() }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full 
+                                        {% if result.status == 'success' %}bg-green-100 text-green-800
+                                        {% elif result.status == 'error' %}bg-red-100 text-red-800
+                                        {% else %}bg-gray-100 text-gray-600{% endif %}">
+                                        {{ result.status.title() }}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-black">{{ result.started_at.strftime('%d/%m/%Y %H:%M') }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-black">
+                                    {% if result.completed_at %}{{ result.completed_at.strftime('%d/%m/%Y %H:%M') }}{% else %}-{% endif %}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <button onclick="viewResult({{ result.id }})" 
+                                            class="bg-black text-white px-3 py-1 rounded text-xs hover:bg-gray-800">
+                                        Ver Resultado
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function startScan(targetId) {
+            if (confirm('Iniciar novo scan para este target?')) {
+                fetch(`/targets/${targetId}/scan`, {
+                    method: 'POST'
+                }).then(response => {
+                    if (response.ok) {
+                        location.reload();
+                    } else {
+                        alert('Erro ao iniciar scan');
+                    }
+                }).catch(error => {
+                    alert('Erro: ' + error.message);
+                });
+            }
+        }
+
+        function stopScan(targetId) {
+            if (confirm('Parar o scan em execução?')) {
+                fetch(`/targets/${targetId}/stop-scan`, {
+                    method: 'POST'
+                }).then(response => {
+                    if (response.ok) {
+                        location.reload();
+                    } else {
+                        alert('Erro ao parar scan');
+                    }
+                }).catch(error => {
+                    alert('Erro: ' + error.message);
+                });
+            }
+        }
+
+        function refreshStatus() {
+            location.reload();
+        }
+
+        function viewResult(resultId) {
+            // Implementar visualização de resultado específico
+            alert('Visualização de resultado será implementada');
+        }
+
+        // Auto-refresh se scan estiver rodando
+        {% if target.scan_status == 'running' %}
+        setInterval(function() {
+            fetch(`/api/targets/{{ target.id }}/status`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.scan_status !== 'running') {
+                        location.reload();
+                    }
+                });
+        }, 5000);
+        {% endif %}
+    </script>
+</body>
+</html>

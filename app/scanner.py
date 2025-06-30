@@ -13,6 +13,7 @@ from .config import hawks_config
 class HawksScanner:
     def __init__(self):
         self.scan_jobs = {}
+        self.stop_flags = {}
         self.tools_path = self._get_tools_path()
     
     def _get_tools_path(self) -> str:
@@ -140,10 +141,15 @@ class HawksScanner:
             return {"status": "error", "error": str(e)}
     
     async def scan_target(self, target_id: int, target: str, db: Session):
-        scan_id = f"scan_{target_id}_{datetime.now().timestamp()}"
+        scan_id = f"scan_{target_id}"
         self.scan_jobs[scan_id] = {"status": "running", "progress": []}
+        self.stop_flags[scan_id] = False
         
         try:
+            # Subfinder
+            if self._should_stop(scan_id):
+                return
+                
             subfinder_result = await self.run_subfinder(target)
             scan_result = HawksScanResult(
                 target_id=target_id,
@@ -155,9 +161,13 @@ class HawksScanner:
             db.add(scan_result)
             db.commit()
             
+            if self._should_stop(scan_id):
+                return
+            
             all_subdomains = subfinder_result.get("subdomains", [])
             
-            if hawks_config.chaos_api_key:
+            # Chaos (se API key disponível)
+            if hawks_config.chaos_api_key and not self._should_stop(scan_id):
                 chaos_result = await self.run_chaos(target)
                 scan_result = HawksScanResult(
                     target_id=target_id,
@@ -173,6 +183,10 @@ class HawksScanner:
                     all_subdomains.extend(chaos_result.get("subdomains", []))
                     all_subdomains = list(set(all_subdomains))
             
+            if self._should_stop(scan_id):
+                return
+                
+            # HTTPX
             httpx_result = await self.run_httpx(all_subdomains)
             scan_result = HawksScanResult(
                 target_id=target_id,
@@ -184,10 +198,14 @@ class HawksScanner:
             db.add(scan_result)
             db.commit()
             
+            if self._should_stop(scan_id):
+                return
+            
+            # Nuclei
             templates = db.query(HawksTemplate).filter(HawksTemplate.enabled == True).order_by(HawksTemplate.order_index).all()
             template_contents = [t.content for t in templates]
             
-            if template_contents and httpx_result["status"] == "success":
+            if template_contents and httpx_result["status"] == "success" and not self._should_stop(scan_id):
                 nuclei_result = await self.run_nuclei(httpx_result.get("live_hosts", []), template_contents)
                 scan_result = HawksScanResult(
                     target_id=target_id,
@@ -199,10 +217,39 @@ class HawksScanner:
                 db.add(scan_result)
                 db.commit()
             
-            self.scan_jobs[scan_id]["status"] = "completed"
+            # Finalizar scan
+            if self._should_stop(scan_id):
+                self.scan_jobs[scan_id]["status"] = "stopped"
+            else:
+                self.scan_jobs[scan_id]["status"] = "completed"
+                
+            # Atualizar status do target no banco
+            from .database import HawksTarget as HawksTargetDB
+            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+            if target_obj:
+                target_obj.scan_status = self.scan_jobs[scan_id]["status"]
+                db.commit()
             
         except Exception as e:
             self.scan_jobs[scan_id]["status"] = "error"
             self.scan_jobs[scan_id]["error"] = str(e)
+            
+            # Atualizar status do target no banco
+            from .database import HawksTarget as HawksTargetDB
+            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+            if target_obj:
+                target_obj.scan_status = "error"
+                db.commit()
+
+    def stop_scan(self, target_id: int):
+        """Para um scan em execução"""
+        scan_id = f"scan_{target_id}"
+        self.stop_flags[scan_id] = True
+        if scan_id in self.scan_jobs:
+            self.scan_jobs[scan_id]["status"] = "stopped"
+
+    def _should_stop(self, scan_id: str) -> bool:
+        """Verifica se o scan deve ser parado"""
+        return self.stop_flags.get(scan_id, False)
 
 hawks_scanner = HawksScanner()

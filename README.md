@@ -156,3 +156,48 @@ Para contribuir com o projeto:
 ## Licença
 
 Este projeto é distribuído sob a licença MIT.
+
+## Novas Funcionalidades Implementadas
+
+### 1. Upload de Templates
+- Upload de arquivos YAML individuais
+- Upload de arquivos ZIP contendo múltiplos templates
+- Processamento automático e inserção no banco de dados
+
+### 2. Clone de Repositórios GitHub
+- Clone direto de repositórios GitHub contendo templates Nuclei
+- Busca automática por arquivos .yaml/.yml no repositório
+- Importação automática para o banco de dados
+
+### 3. Controle de Scans
+- **Parar Scans**: Funcionalidade para interromper scans em execução
+- **Status em Tempo Real**: Atualização automática do status dos scans
+- **Verificação de Parada**: Sistema de flags para interromper operações de forma segura
+
+### 4. Dashboard Específico por Target
+- **Dashboard Individual**: Cada target tem seu próprio dashboard detalhado
+- **Métricas Específicas**: 
+  - Total de subdomínios encontrados
+  - Hosts ativos identificados
+  - Vulnerabilidades detectadas
+  - Histórico completo de scans
+- **Controles Interativos**: Iniciar/parar scans diretamente do dashboard
+- **Auto-refresh**: Atualização automática quando scan está em execução
+
+### 5. Melhorias na Interface
+- Botões para acessar dashboard específico de cada target
+- Botões para parar scans em execução
+- Indicadores visuais de status mais claros
+- Links diretos entre páginas
+
+### 6. Melhorias Técnicas
+- Autenticação JWT implementada
+- Redirecionamento automático para usuários autenticados
+- Tratamento de erros melhorado
+- Sistema de parada de scans thread-safe
+
+### 7. Sistema de Instalação
+- Script de instalação simplificado
+- Instalação automática de todas as dependências (Go, tools de reconhecimento)
+- Verificação de dependências
+- Configuração automática do ambiente

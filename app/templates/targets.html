@@ -82,10 +82,21 @@
                                     {% endif %}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <a href="/targets/{{ target.id }}/dashboard" 
+                                       class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 mr-2">
+                                        Dashboard
+                                    </a>
+                                    {% if target.scan_status != 'running' %}
                                     <button onclick="scanTarget({{ target.id }})" 
                                             class="bg-black text-white px-3 py-1 rounded text-xs hover:bg-gray-800 mr-2">
                                         Scan
                                     </button>
+                                    {% else %}
+                                    <button onclick="stopScan({{ target.id }})" 
+                                            class="bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700 mr-2">
+                                        Parar
+                                    </button>
+                                    {% endif %}
                                     <button onclick="deleteTarget({{ target.id }})" 
                                             class="bg-gray-600 text-white px-3 py-1 rounded text-xs hover:bg-gray-700">
                                         Remover
@@ -127,6 +138,24 @@
                         location.reload();
                     } else {
                         alert('Erro ao remover alvo');
+                    }
+                } catch (error) {
+                    alert('Erro: ' + error.message);
+                }
+            }
+        }
+
+        async function stopScan(targetId) {
+            if (confirm('Tem certeza que deseja parar o scan?')) {
+                try {
+                    const response = await fetch(`/targets/${targetId}/stop-scan`, {
+                        method: 'POST'
+                    });
+                    if (response.ok) {
+                        alert('Scan parado com sucesso!');
+                        location.reload();
+                    } else {
+                        alert('Erro ao parar scan');
                     }
                 } catch (error) {
                     alert('Erro: ' + error.message);
