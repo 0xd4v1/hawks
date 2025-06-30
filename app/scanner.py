@@ -12,95 +12,181 @@ from .config import hawks_config
 
 class HawksScanner:
     def __init__(self):
-        self.scan_jobs = {}
-        self.stop_flags = {}
-        self.tools_path = self._get_tools_path()
+        # Estado simplificado da fila
+        self.scan_jobs = {}  # {scan_id: {"status": str, "progress": list, "error": str}}
+        self.stop_flags = {}  # {scan_id: bool}
+        
+        # Sistema de fila simplificado
         self.scan_queue = asyncio.Queue()
-        self.active_scans = {}
-        self.scan_lock = asyncio.Lock()
-        self.queue_processor_task = None
-        self.queue_processor_running = False
-    
+        self.active_scans = set()  # Set simples ao invés de dict
+        self.processor_running = False
+        self.processor_task = None
+        
+        # Configurações
+        self.tools_path = self._get_tools_path()
+        self.max_concurrent = hawks_config.max_concurrent_scans
+
     async def start_queue_processor(self):
-        """Inicia o processador de fila de scans"""
-        if self.queue_processor_task is None and not self.queue_processor_running:
-            self.queue_processor_running = True
-            self.queue_processor_task = asyncio.create_task(self._queue_processor())
-            print("Hawks Scanner - Processador de fila iniciado")
-    
+        """Inicia o processador de fila"""
+        if not self.processor_running:
+            self.processor_running = True
+            self.processor_task = asyncio.create_task(self._queue_processor_loop())
+            print("🚀 Hawks Scanner - Processador de fila iniciado")
+
     async def stop_queue_processor(self):
-        """Para o processador de fila de scans"""
-        self.queue_processor_running = False
-        if self.queue_processor_task:
-            self.queue_processor_task.cancel()
+        """Para o processador de fila"""
+        self.processor_running = False
+        if self.processor_task:
+            self.processor_task.cancel()
             try:
-                await self.queue_processor_task
+                await self.processor_task
             except asyncio.CancelledError:
                 pass
-            self.queue_processor_task = None
-            print("Hawks Scanner - Processador de fila parado")
-    
-    async def _queue_processor(self):
-        """Processador contínuo da fila de scans"""
-        print("Hawks Scanner - Processador de fila em execução")
-        while self.queue_processor_running:
+            self.processor_task = None
+        print("🛑 Hawks Scanner - Processador de fila parado")
+
+    async def _queue_processor_loop(self):
+        """Loop principal do processador de fila - versão simplificada e robusta"""
+        print("⚡ Hawks Scanner - Processador de fila ativo")
+        
+        while self.processor_running:
             try:
-                # Verificar se há capacidade para novos scans
-                async with self.scan_lock:
-                    has_capacity = len(self.active_scans) < hawks_config.max_concurrent_scans
-                    active_count = len(self.active_scans)
-                    queue_size = self.scan_queue.qsize()
+                # Status rápido para debug
+                queue_size = self.scan_queue.qsize()
+                active_count = len(self.active_scans)
                 
-                # Log periódico do status da fila (apenas se há atividade)
-                if active_count > 0 or queue_size > 0:
-                    print(f"Hawks Scanner - Scans ativos: {active_count}/{hawks_config.max_concurrent_scans}, Fila: {queue_size}")
-                
-                if has_capacity and not self.scan_queue.empty():
+                # Log apenas quando há atividade
+                if queue_size > 0 or active_count > 0:
+                    print(f"📊 Fila: {queue_size} aguardando | {active_count}/{self.max_concurrent} ativos")
+
+                # Verificar se pode processar mais scans
+                if active_count < self.max_concurrent and queue_size > 0:
                     try:
-                        scan_data = await asyncio.wait_for(self.scan_queue.get(), timeout=0.1)
-                        # Atualizar status para running antes de executar
-                        target_id = scan_data[0]
-                        scan_id = f"scan_{target_id}"
-                        if scan_id in self.scan_jobs:
-                            self.scan_jobs[scan_id]["status"] = "running"
+                        # Pegar próximo scan da fila (timeout curto)
+                        scan_data = await asyncio.wait_for(
+                            self.scan_queue.get(), 
+                            timeout=0.5
+                        )
                         
-                        print(f"Hawks Scanner - Iniciando scan do target {target_id}")
-                        # Executar scan
-                        asyncio.create_task(self._execute_scan(scan_data))
+                        # Processar scan imediatamente
+                        asyncio.create_task(self._execute_queued_scan(scan_data))
+                        
                     except asyncio.TimeoutError:
+                        # Timeout esperado, continuar loop
                         pass
                 else:
-                    # Se não há capacidade ou fila vazia, aguardar mais tempo
-                    await asyncio.sleep(5)  # Aguardar 5 segundos antes de verificar novamente
+                    # Aguardar antes de verificar novamente
+                    await asyncio.sleep(2)
                     
             except asyncio.CancelledError:
-                print("Hawks Scanner - Processador de fila cancelado")
+                print("❌ Processador de fila cancelado")
                 break
             except Exception as e:
-                print(f"Hawks Scanner - Erro no processador de fila: {e}")
-                await asyncio.sleep(2)
-    
-    async def _execute_scan(self, scan_data):
-        """Executa um scan da fila"""
-        target_id, target, db = scan_data
+                print(f"⚠️ Erro no processador de fila: {e}")
+                # Aguardar antes de tentar novamente
+                await asyncio.sleep(5)
+
+    async def _execute_queued_scan(self, scan_data):
+        """Executa um scan vindo da fila - método simplificado"""
+        target_id, target, db_session_data = scan_data
         scan_id = f"scan_{target_id}"
         
-        print(f"Hawks Scanner - Executando scan da fila para target {target_id}: {target}")
+        # Adicionar aos scans ativos
+        self.active_scans.add(scan_id)
         
-        async with self.scan_lock:
-            self.active_scans[scan_id] = True
+        # Atualizar status
+        if scan_id in self.scan_jobs:
+            self.scan_jobs[scan_id]["status"] = "running"
+        
+        print(f"🔍 Iniciando scan: Target {target_id} ({target})")
         
         try:
-            await self._run_scan_pipeline(target_id, target, db)
-            print(f"Hawks Scanner - Scan concluído para target {target_id}")
+            # Executar pipeline de scan
+            await self._run_scan_pipeline(target_id, target, db_session_data)
+            print(f"✅ Scan concluído: Target {target_id}")
+            
         except Exception as e:
-            print(f"Hawks Scanner - Erro no scan do target {target_id}: {e}")
+            print(f"❌ Erro no scan {target_id}: {e}")
+            if scan_id in self.scan_jobs:
+                self.scan_jobs[scan_id]["status"] = "error"
+                self.scan_jobs[scan_id]["error"] = str(e)
         finally:
-            async with self.scan_lock:
-                if scan_id in self.active_scans:
-                    del self.active_scans[scan_id]
-                    print(f"Hawks Scanner - Removido target {target_id} dos scans ativos")
-    
+            # Sempre remover dos scans ativos
+            self.active_scans.discard(scan_id)
+
+    async def scan_target(self, target_id: int, target: str, db: Session):
+        """Interface principal para iniciar scan de um target"""
+        scan_id = f"scan_{target_id}"
+        
+        # Inicializar job
+        self.scan_jobs[scan_id] = {
+            "status": "queued", 
+            "progress": [], 
+            "error": None
+        }
+        self.stop_flags[scan_id] = False
+        
+        print(f"📨 Adicionando à fila: Target {target_id} ({target})")
+        
+        # Sempre adicionar à fila para processamento uniforme
+        # Serializar dados necessários do banco para evitar problemas de sessão
+        db_data = self._serialize_db_session(db)
+        await self.scan_queue.put((target_id, target, db_data))
+        
+        # Atualizar status no banco
+        self._update_target_status(target_id, "queued", db)
+
+    async def scan_multiple_targets(self, target_ids: List[int], db: Session):
+        """Adiciona múltiplos targets à fila"""
+        from .database import HawksTarget as HawksTargetDB
+        
+        for target_id in target_ids:
+            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+            if target_obj:
+                await self.scan_target(target_id, target_obj.domain_ip, db)
+
+    def _serialize_db_session(self, db: Session):
+        """Serializa dados necessários da sessão do banco"""
+        return {
+            "database_url": hawks_config.database_url
+        }
+
+    def _update_target_status(self, target_id: int, status: str, db: Session):
+        """Atualiza status do target no banco de forma segura"""
+        try:
+            from .database import HawksTarget as HawksTargetDB
+            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+            if target_obj:
+                target_obj.scan_status = status
+                target_obj.last_scan = datetime.utcnow()
+                db.commit()
+        except Exception as e:
+            print(f"⚠️ Erro ao atualizar status do target {target_id}: {e}")
+
+    def get_queue_status(self):
+        """Retorna status atual da fila"""
+        return {
+            "active_scans": len(self.active_scans),
+            "queued_scans": self.scan_queue.qsize(),
+            "max_concurrent": self.max_concurrent,
+            "scan_threads": hawks_config.scan_threads,
+            "queue_processor_running": self.processor_running,
+            "active_scan_ids": list(self.active_scans),
+            "scan_jobs_count": len(self.scan_jobs)
+        }
+
+    def stop_scan(self, target_id: int):
+        """Para um scan específico"""
+        scan_id = f"scan_{target_id}"
+        self.stop_flags[scan_id] = True
+        if scan_id in self.scan_jobs:
+            self.scan_jobs[scan_id]["status"] = "stopped"
+        print(f"🛑 Parando scan: {scan_id}")
+
+    def _should_stop(self, scan_id: str) -> bool:
+        """Verifica se um scan deve ser parado"""
+        return self.stop_flags.get(scan_id, False)
+
     def _get_tools_path(self) -> str:
         home_go_bin = os.path.expanduser("~/go/bin")
         if os.path.exists(home_go_bin):
@@ -536,16 +622,16 @@ class HawksScanner:
                         env=os.environ.copy()
                     )
                     
-                    # Implementar timeout manualmente para o nuclei
+                    # Implementar timeout reduzido para o nuclei
                     try:
                         stdout, stderr = await asyncio.wait_for(
                             process.communicate(), 
-                            timeout=300  # 5 minutos
+                            timeout=120  # 2 minutos - reduzido para evitar travamentos
                         )
                     except asyncio.TimeoutError:
                         process.kill()
                         await process.wait()
-                        raise asyncio.TimeoutError("Nuclei timeout after 5 minutes")
+                        raise asyncio.TimeoutError("Nuclei timeout after 2 minutes")
                     
                     print(f"NUCLEI: Return code: {process.returncode}")
                     stderr_content = stderr.decode().strip()
@@ -618,80 +704,34 @@ class HawksScanner:
             print(f"NUCLEI: Exception - {str(e)}")
             return {"status": "error", "error": str(e)}
     
-    async def scan_target(self, target_id: int, target: str, db: Session):
-        """Adiciona scan à fila ou executa imediatamente se há capacidade"""
+    async def _run_scan_pipeline(self, target_id: int, target: str, db_session_data: dict):
+        """Pipeline de scan corrigido e simplificado"""
         scan_id = f"scan_{target_id}"
-        self.scan_jobs[scan_id] = {"status": "queued", "progress": []}
-        self.stop_flags[scan_id] = False
         
-        print(f"Hawks Scanner - Solicitação de scan para target {target_id}: {target}")
-        
-        # Verificar se pode executar imediatamente
-        async with self.scan_lock:
-            can_run_now = len(self.active_scans) < hawks_config.max_concurrent_scans
-        
-        if can_run_now:
-            # Executar imediatamente
-            async with self.scan_lock:
-                self.active_scans[scan_id] = True
-            
+        # Atualizar status
+        if scan_id in self.scan_jobs:
             self.scan_jobs[scan_id]["status"] = "running"
-            print(f"Hawks Scanner - Executando scan imediatamente para target {target_id}")
-            
+            self.scan_jobs[scan_id]["progress"] = []
+        
+        # Criar nova sessão de banco para este scan
+        from .database import SessionLocal, HawksTarget as HawksTargetDB
+        db = SessionLocal()
+        
+        try:
             # Atualizar status no banco
-            from .database import HawksTarget as HawksTargetDB
             target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
             if target_obj:
                 target_obj.scan_status = "running"
                 db.commit()
             
-            # Executar scan diretamente
-            asyncio.create_task(self._run_scan_pipeline(target_id, target, db))
-        else:
-            # Adicionar à fila se não pode executar agora
-            print(f"Hawks Scanner - Adicionando target {target_id} à fila (scans ativos: {len(self.active_scans)}/{hawks_config.max_concurrent_scans})")
-            
-            # Adicionar à fila
-            await self.scan_queue.put((target_id, target, db))
-            
-            # Atualizar status no banco
-            from .database import HawksTarget as HawksTargetDB
-            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
-            if target_obj:
-                target_obj.scan_status = "queued"
-                db.commit()
-    
-    async def scan_multiple_targets(self, target_ids: List[int], db: Session):
-        """Adiciona múltiplos targets para scan, executando imediatamente os que puder"""
-        from .database import HawksTarget as HawksTargetDB
-        
-        for target_id in target_ids:
-            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
-            if target_obj:
-                await self.scan_target(target_id, target_obj.domain_ip, db)
-    
-    def get_queue_status(self):
-        """Retorna status detalhado da fila de scans"""
-        return {
-            "active_scans": len(self.active_scans),
-            "queued_scans": self.scan_queue.qsize(),
-            "max_concurrent": hawks_config.max_concurrent_scans,
-            "scan_threads": hawks_config.scan_threads,
-            "queue_processor_running": self.queue_processor_running,
-            "active_scan_ids": list(self.active_scans.keys()),
-            "scan_jobs_count": len(self.scan_jobs)
-        }
-    
-    async def _run_scan_pipeline(self, target_id: int, target: str, db: Session):
-        scan_id = f"scan_{target_id}"
-        self.scan_jobs[scan_id] = {"status": "running", "progress": []}
-        
-        try:
-            # Subfinder
+            # 1. SUBFINDER
             if self._should_stop(scan_id):
                 return
                 
+            print(f"🔍 {scan_id}: Executando Subfinder...")
             subfinder_result = await self.run_subfinder(target)
+            
+            # Salvar resultado do subfinder
             scan_result = HawksScanResult(
                 target_id=target_id,
                 scan_type="subfinder",
@@ -705,7 +745,8 @@ class HawksScanner:
             if self._should_stop(scan_id):
                 return
                 
-            # HTTPX - usar arquivo do subfinder se disponível
+            # 2. HTTPX - usar arquivo do subfinder se disponível
+            print(f"🌐 {scan_id}: Executando HTTPX...")
             subfinder_file = subfinder_result.get("output_file")
             all_subdomains = subfinder_result.get("subdomains", [])
             
@@ -781,49 +822,40 @@ class HawksScanner:
                     except:
                         pass
             
-            # Finalizar scan
-            if self._should_stop(scan_id):
-                self.scan_jobs[scan_id]["status"] = "stopped"
-            else:
-                self.scan_jobs[scan_id]["status"] = "completed"
+            # Finalizar scan com sucesso
+            status = "stopped" if self._should_stop(scan_id) else "completed"
+            
+            if scan_id in self.scan_jobs:
+                self.scan_jobs[scan_id]["status"] = status
                 
-            # Atualizar status do target no banco
-            from .database import HawksTarget as HawksTargetDB
+            # Atualizar status final no banco
             target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
             if target_obj:
-                target_obj.scan_status = self.scan_jobs[scan_id]["status"]
+                target_obj.scan_status = status
                 db.commit()
-            
-            # Remover da lista de scans ativos
-            async with self.scan_lock:
-                if scan_id in self.active_scans:
-                    del self.active_scans[scan_id]
+                
+            print(f"✅ {scan_id}: Pipeline concluído com status {status}")
             
         except Exception as e:
-            self.scan_jobs[scan_id]["status"] = "error"
-            self.scan_jobs[scan_id]["error"] = str(e)
+            error_msg = str(e)
+            print(f"❌ {scan_id}: Erro no pipeline - {error_msg}")
             
-            # Atualizar status do target no banco
-            from .database import HawksTarget as HawksTargetDB
-            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
-            if target_obj:
-                target_obj.scan_status = "error"
-                db.commit()
+            # Atualizar status de erro
+            if scan_id in self.scan_jobs:
+                self.scan_jobs[scan_id]["status"] = "error"
+                self.scan_jobs[scan_id]["error"] = error_msg
             
-            # Remover da lista de scans ativos
-            async with self.scan_lock:
-                if scan_id in self.active_scans:
-                    del self.active_scans[scan_id]
-
-    def stop_scan(self, target_id: int):
-        """Para um scan em execução"""
-        scan_id = f"scan_{target_id}"
-        self.stop_flags[scan_id] = True
-        if scan_id in self.scan_jobs:
-            self.scan_jobs[scan_id]["status"] = "stopped"
-
-    def _should_stop(self, scan_id: str) -> bool:
-        """Verifica se o scan deve ser parado"""
-        return self.stop_flags.get(scan_id, False)
+            # Atualizar banco com erro
+            try:
+                target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+                if target_obj:
+                    target_obj.scan_status = "error"
+                    db.commit()
+            except:
+                pass
+                
+        finally:
+            # Sempre fechar sessão do banco
+            db.close()
 
 hawks_scanner = HawksScanner()
