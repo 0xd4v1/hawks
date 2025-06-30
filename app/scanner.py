@@ -520,24 +520,47 @@ class HawksScanner:
             for config_name, template_args in template_configs:
                 print(f"NUCLEI: Tentando configuração '{config_name}'...")
                 
-                # Comando básico do nuclei
-                cmd = [nuclei_path, "-l", hosts_file, "-json", "-silent", "-nc"]
+                # Usar comando com pipe: cat arquivo | nuclei
+                nuclei_cmd = [nuclei_path, "-json", "-silent", "-nc"]
                 
                 # Adicionar templates se especificados
                 if template_args:
-                    cmd.extend(template_args)
+                    nuclei_cmd.extend(template_args)
                 
-                print(f"NUCLEI: Comando: {' '.join(cmd)}")
+                # Comando completo: cat hosts_file | nuclei args
+                cat_cmd = ["cat", hosts_file]
+                
+                print(f"NUCLEI: Comando: cat {hosts_file} | {' '.join(nuclei_cmd)}")
                 
                 try:
-                    process = await asyncio.create_subprocess_exec(
-                        *cmd, 
-                        stdout=asyncio.subprocess.PIPE, 
+                    # Executar cat primeiro
+                    cat_process = await asyncio.create_subprocess_exec(
+                        *cat_cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    
+                    # Executar nuclei com stdin do cat
+                    nuclei_process = await asyncio.create_subprocess_exec(
+                        *nuclei_cmd,
+                        stdin=cat_process.stdout,
+                        stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         env=os.environ.copy()
                     )
                     
-                    # Implementar timeout manualmente
+                    # Fechar stdout do cat para que o nuclei receba EOF
+                    cat_process.stdout.close()
+                    
+                    # Aguardar ambos os processos
+                    cat_stdout, cat_stderr = await cat_process.communicate()
+                    process = nuclei_process
+                    
+                    # Aguardar ambos os processos
+                    cat_stdout, cat_stderr = await cat_process.communicate()
+                    process = nuclei_process
+                    
+                    # Implementar timeout manualmente para o nuclei
                     try:
                         stdout, stderr = await asyncio.wait_for(
                             process.communicate(), 
