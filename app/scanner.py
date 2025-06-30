@@ -512,7 +512,6 @@ class HawksScanner:
                 print("NUCLEI: Adicione templates .yaml na pasta ./templates/custom/ para executar scans")
                 return {"status": "error", "error": "No templates found in ./templates/custom/"}
             
-                    print(f"NUCLEI: Encontrados {len(yaml_files)} templates custom: {yaml_files}")
             template_configs = [("custom-only", ["-t", custom_templates_dir])]
             
             # Tentar cada configuração até uma funcionar
