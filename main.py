@@ -224,9 +224,21 @@ async def create_template(
     if existing:
         raise HTTPException(status_code=400, detail="Template name already exists")
     
+    # Salvar template no banco
     template = HawksTemplateDB(name=name, content=content, enabled=enabled, order_index=order_index)
     db.add(template)
     db.commit()
+    
+    # Salvar template físico na pasta templates/custom
+    try:
+        custom_dir = os.path.join(os.getcwd(), "templates", "custom")
+        os.makedirs(custom_dir, exist_ok=True)
+        template_file_path = os.path.join(custom_dir, f"{name}.yaml")
+        with open(template_file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except Exception as e:
+        print(f"Warning: Could not save template file: {e}")
+    
     return RedirectResponse(url="/templates", status_code=302)
 
 @app.delete("/templates/{template_id}")
@@ -238,6 +250,15 @@ async def delete_template(request: Request, template_id: int, db: Session = Depe
     template = db.query(HawksTemplateDB).filter(HawksTemplateDB.id == template_id).first()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    
+    # Remover arquivo físico se existir
+    try:
+        custom_dir = os.path.join(os.getcwd(), "templates", "custom")
+        template_file_path = os.path.join(custom_dir, f"{template.name}.yaml")
+        if os.path.exists(template_file_path):
+            os.remove(template_file_path)
+    except Exception as e:
+        print(f"Warning: Could not remove template file: {e}")
     
     db.delete(template)
     db.commit()
@@ -253,7 +274,10 @@ async def upload_template(
     if not user:
         return RedirectResponse(url="/login")
     
-    if file.content_type == "application/zip":
+    custom_dir = os.path.join(os.getcwd(), "templates", "custom")
+    os.makedirs(custom_dir, exist_ok=True)
+    
+    if file.content_type == "application/zip" or file.filename.endswith('.zip'):
         with tempfile.TemporaryDirectory() as tmpdirname:
             zip_path = f"{tmpdirname}/{file.filename}"
             with open(zip_path, "wb") as buffer:
@@ -264,30 +288,51 @@ async def upload_template(
                 
                 for extracted_file in zip_ref.namelist():
                     if extracted_file.endswith(".yaml") or extracted_file.endswith(".yml"):
-                        with open(f"{tmpdirname}/{extracted_file}", 'r') as yaml_file:
-                            yaml_content = yaml_file.read()
-                            template_name = extracted_file[:-5]  # remove .yaml or .yml
-                            db_template = HawksTemplateDB(
-                                name=template_name, 
-                                content=yaml_content, 
-                                enabled=True, 
-                                order_index=0
-                            )
-                            db.add(db_template)
+                        try:
+                            with open(f"{tmpdirname}/{extracted_file}", 'r', encoding='utf-8') as yaml_file:
+                                yaml_content = yaml_file.read()
+                                template_name = os.path.basename(extracted_file).replace('.yaml', '').replace('.yml', '')
+                                
+                                # Salvar no banco
+                                existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == template_name).first()
+                                if not existing:
+                                    db_template = HawksTemplateDB(
+                                        name=template_name, 
+                                        content=yaml_content, 
+                                        enabled=True, 
+                                        order_index=0
+                                    )
+                                    db.add(db_template)
+                                    
+                                    # Salvar arquivo físico
+                                    template_file_path = os.path.join(custom_dir, f"{template_name}.yaml")
+                                    with open(template_file_path, 'w', encoding='utf-8') as f:
+                                        f.write(yaml_content)
+                        except Exception as e:
+                            continue
                 db.commit()
     
-    elif file.content_type == "application/x-yaml" or file.content_type == "text/yaml":
+    elif file.content_type in ["application/x-yaml", "text/yaml"] or file.filename.endswith(('.yaml', '.yml')):
         contents = await file.read()
         yaml_content = contents.decode("utf-8")
+        template_name = file.filename.replace('.yaml', '').replace('.yml', '')
         
-        template = HawksTemplateDB(
-            name=file.filename, 
-            content=yaml_content, 
-            enabled=True, 
-            order_index=0
-        )
-        db.add(template)
-        db.commit()
+        # Salvar no banco
+        existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == template_name).first()
+        if not existing:
+            template = HawksTemplateDB(
+                name=template_name, 
+                content=yaml_content, 
+                enabled=True, 
+                order_index=0
+            )
+            db.add(template)
+            db.commit()
+            
+            # Salvar arquivo físico
+            template_file_path = os.path.join(custom_dir, f"{template_name}.yaml")
+            with open(template_file_path, 'w', encoding='utf-8') as f:
+                f.write(yaml_content)
     
     else:
         raise HTTPException(status_code=400, detail="File type not supported")
@@ -310,6 +355,9 @@ async def clone_templates_from_github(
         if 'github.com' not in parsed_url.netloc:
             raise HTTPException(status_code=400, detail="URL deve ser do GitHub")
         
+        custom_dir = os.path.join(os.getcwd(), "templates", "custom")
+        os.makedirs(custom_dir, exist_ok=True)
+        
         # Criar diretório temporário para clone
         with tempfile.TemporaryDirectory() as tmpdirname:
             try:
@@ -330,9 +378,9 @@ async def clone_templates_from_github(
                         with open(yaml_file, 'r', encoding='utf-8') as f:
                             content = f.read()
                         
-                        # Nome do template baseado no caminho relativo
-                        rel_path = os.path.relpath(yaml_file, tmpdirname)
-                        template_name = rel_path.replace(os.sep, '_').replace('.yaml', '').replace('.yml', '')
+                        # Nome do template baseado no nome do arquivo
+                        filename = os.path.basename(yaml_file)
+                        template_name = filename.replace('.yaml', '').replace('.yml', '')
                         
                         # Verificar se já existe
                         existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == template_name).first()
@@ -345,6 +393,11 @@ async def clone_templates_from_github(
                             )
                             db.add(template)
                             templates_added += 1
+                            
+                            # Salvar arquivo físico
+                            template_file_path = os.path.join(custom_dir, f"{template_name}.yaml")
+                            with open(template_file_path, 'w', encoding='utf-8') as f:
+                                f.write(content)
                     except Exception as e:
                         continue
                 

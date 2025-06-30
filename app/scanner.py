@@ -79,64 +79,144 @@ class HawksScanner:
             return {"status": "error", "error": "No subdomains to check"}
         
         try:
-            with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
-                f.write('\n'.join(subdomains))
+            # Preparar lista de URLs válidas
+            urls_to_check = []
+            for subdomain in subdomains:
+                subdomain = subdomain.strip()
+                if not subdomain:
+                    continue
+                    
+                # Se já tem protocolo, usar como está
+                if subdomain.startswith(('http://', 'https://')):
+                    urls_to_check.append(subdomain)
+                else:
+                    # Adicionar ambos os protocolos
+                    urls_to_check.append(f"https://{subdomain}")
+                    urls_to_check.append(f"http://{subdomain}")
+            
+            if not urls_to_check:
+                return {"status": "error", "error": "No valid URLs to check"}
+            
+            # Escrever URLs no arquivo temporário
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
+                for url in urls_to_check:
+                    f.write(f"{url}\n")
                 temp_file = f.name
             
             httpx_path = self._get_tool_path("httpx")
-            cmd = [httpx_path, "-l", temp_file, "-o", "-", "-silent"]
+            cmd = [
+                httpx_path, 
+                "-l", temp_file, 
+                "-silent", 
+                "-no-color",
+                "-timeout", "15",
+                "-retries", "1",
+                "-status-code",
+                "-follow-redirects",
+                "-mc", "200,201,202,204,301,302,303,307,308,401,403,405,429,500,502,503"
+            ]
+            
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
             
-            os.unlink(temp_file)
+            # Limpar arquivo temporário
+            try:
+                os.unlink(temp_file)
+            except:
+                pass
             
-            if process.returncode == 0:
-                live_hosts = stdout.decode().strip().split('\n')
-                return {"status": "success", "live_hosts": [h for h in live_hosts if h]}
+            if process.returncode == 0 or process.returncode == 1:  # 1 pode ser para alguns hosts não encontrados
+                live_hosts = []
+                output_lines = stdout.decode().strip().split('\n')
+                
+                for line in output_lines:
+                    line = line.strip()
+                    if line and not line.startswith('[') and '://' in line:
+                        # Extrair URL da linha (pode ter status code no final)
+                        parts = line.split()
+                        if parts:
+                            url = parts[0]
+                            if url.startswith(('http://', 'https://')):
+                                live_hosts.append(url)
+                
+                # Remover duplicatas mantendo ordem
+                unique_hosts = []
+                seen = set()
+                for host in live_hosts:
+                    if host not in seen:
+                        unique_hosts.append(host)
+                        seen.add(host)
+                
+                return {"status": "success", "live_hosts": unique_hosts}
             else:
-                return {"status": "error", "error": stderr.decode()}
+                error_msg = stderr.decode().strip()
+                if not error_msg:
+                    error_msg = f"HTTPX failed with return code {process.returncode}"
+                return {"status": "error", "error": error_msg}
+                
         except Exception as e:
             return {"status": "error", "error": str(e)}
     
-    async def run_nuclei(self, hosts: List[str], templates: List[str]) -> Dict:
-        if not hosts or not templates:
-            return {"status": "error", "error": "No hosts or templates"}
+    async def run_nuclei(self, hosts: List[str], templates: List[str] = None) -> Dict:
+        if not hosts:
+            return {"status": "error", "error": "No hosts to scan"}
         
         try:
-            with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
-                f.write('\n'.join(hosts))
+            # Escrever hosts no arquivo temporário
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
+                for host in hosts:
+                    f.write(f"{host}\n")
                 hosts_file = f.name
             
-            with tempfile.TemporaryDirectory() as temp_dir:
-                template_files = []
-                for i, template_content in enumerate(templates):
-                    template_path = os.path.join(temp_dir, f"template_{i}.yaml")
-                    with open(template_path, 'w') as tf:
-                        tf.write(template_content)
-                    template_files.append(template_path)
-                
-                nuclei_path = self._get_tool_path("nuclei")
-                cmd = [nuclei_path, "-l", hosts_file, "-t"] + template_files + ["-json", "-silent"]
-                process = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await process.communicate()
+            nuclei_path = self._get_tool_path("nuclei")
+            cmd = [nuclei_path, "-l", hosts_file, "-json", "-silent", "-no-color", "-no-meta"]
             
-            os.unlink(hosts_file)
+            # Usar templates custom se disponíveis na pasta templates/custom
+            custom_templates_dir = os.path.join(os.getcwd(), "templates", "custom")
+            if os.path.exists(custom_templates_dir) and os.listdir(custom_templates_dir):
+                yaml_files = [f for f in os.listdir(custom_templates_dir) if f.endswith('.yaml') or f.endswith('.yml')]
+                if yaml_files:
+                    cmd.extend(["-t", custom_templates_dir])
+                else:
+                    # Usar templates padrão se não há custom
+                    cmd.extend(["-t", "~/.nuclei-templates/"])
+            else:
+                # Usar templates padrão se pasta custom não existe ou está vazia
+                cmd.extend(["-t", "~/.nuclei-templates/"])
             
-            if process.returncode == 0:
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            # Limpar arquivo temporário
+            try:
+                os.unlink(hosts_file)
+            except:
+                pass
+            
+            if process.returncode == 0 or process.returncode == 1:  # 1 pode ser quando não há resultados
                 results = []
-                for line in stdout.decode().strip().split('\n'):
-                    if line:
+                output_lines = stdout.decode().strip().split('\n')
+                
+                for line in output_lines:
+                    line = line.strip()
+                    if line and line.startswith('{'):
                         try:
-                            results.append(json.loads(line))
+                            result = json.loads(line)
+                            results.append(result)
                         except json.JSONDecodeError:
                             continue
+                
                 return {"status": "success", "results": results}
             else:
-                return {"status": "error", "error": stderr.decode()}
+                error_msg = stderr.decode().strip()
+                if not error_msg:
+                    error_msg = f"Nuclei failed with return code {process.returncode}"
+                return {"status": "error", "error": error_msg}
+                
         except Exception as e:
             return {"status": "error", "error": str(e)}
     
@@ -201,12 +281,9 @@ class HawksScanner:
             if self._should_stop(scan_id):
                 return
             
-            # Nuclei
-            templates = db.query(HawksTemplate).filter(HawksTemplate.enabled == True).order_by(HawksTemplate.order_index).all()
-            template_contents = [t.content for t in templates]
-            
-            if template_contents and httpx_result["status"] == "success" and not self._should_stop(scan_id):
-                nuclei_result = await self.run_nuclei(httpx_result.get("live_hosts", []), template_contents)
+            # Nuclei - usar templates custom salvos fisicamente
+            if httpx_result["status"] == "success" and not self._should_stop(scan_id):
+                nuclei_result = await self.run_nuclei(httpx_result.get("live_hosts", []))
                 scan_result = HawksScanResult(
                     target_id=target_id,
                     scan_type="nuclei",
