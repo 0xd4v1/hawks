@@ -9,7 +9,6 @@ services:
     volumes:
       - ./hawks.db:/app/hawks.db
       - ./templates/custom:/app/templates/custom
-      - ./logs:/app/logs
     environment:
       - SECRET_KEY=${SECRET_KEY:-}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
@@ -17,17 +16,10 @@ services:
       - CHAOS_API_KEY=${CHAOS_API_KEY:-}
       - DATABASE_URL=sqlite:///./hawks.db
     restart: unless-stopped
-    networks:
-      - hawks-network
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import requests; requests.get('http://localhost:8000', timeout=5)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+    command: ["python3", "main.py"]
 
 networks:
-  hawks-network:
+  default:
     driver: bridge
 
 volumes:

@@ -40,45 +40,10 @@ RUN nuclei -update-templates
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p templates/custom app/static logs
-
-# Create default .env if not exists
-RUN if [ ! -f .env ]; then \
-    python3 -c "import secrets, string; \
-    secret_key = secrets.token_urlsafe(64); \
-    chars = string.ascii_letters + string.digits + '!@#\$%^&*'; \
-    secure_password = ''.join(secrets.choice(chars) for _ in range(16)); \
-    print(f'SECRET_KEY={secret_key}'); \
-    print(f'ADMIN_USERNAME=admin'); \
-    print(f'ADMIN_PASSWORD={secure_password}'); \
-    print(f'CHAOS_API_KEY='); \
-    print(f'DATABASE_URL=sqlite:///./hawks.db')" > .env; \
-    echo "Generated .env file with secure credentials"; \
-    fi
-
-# Initialize database with proper error handling
-RUN python3 -c " \
-import sys; \
-import os; \
-try: \
-    from app.database import init_db; \
-    init_db(); \
-    print('Database initialized successfully'); \
-except Exception as e: \
-    print(f'Database initialization error: {e}'); \
-    print('This is normal on first run'); \
-"
-
-# Set proper permissions
-RUN chmod 600 .env 2>/dev/null || true
-RUN chmod 644 hawks.db 2>/dev/null || true
+RUN mkdir -p templates/custom app/static
 
 # Expose port
 EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 -c "import requests; requests.get('http://localhost:8000', timeout=5)" || exit 1
 
 # Run the application
 CMD ["python3", "main.py"] 
