@@ -265,7 +265,7 @@ class HawksScanner:
                         content = f.read().strip()
                         if content:
                             live_hosts = [line.strip() for line in content.split('\n') if line.strip()]
-                            print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos")
+                            print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos (via arquivo)")
                             
                             # Limpar arquivo do subfinder
                             try:
@@ -287,8 +287,36 @@ class HawksScanner:
                                 pass
                             return {"status": "error", "error": "No live hosts found"}
                 else:
-                    print("HTTPX: Arquivo de saída não foi criado")
-                    return {"status": "error", "error": "HTTPX output file not created"}
+                    # Arquivo não foi criado, mas verificar se há saída no stdout
+                    stdout_content = stdout.decode().strip()
+                    if stdout_content:
+                        print("HTTPX: Arquivo não criado, usando stdout")
+                        live_hosts = [line.strip() for line in stdout_content.split('\n') if line.strip()]
+                        print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos (via stdout)")
+                        
+                        # Criar arquivo manualmente com o conteúdo do stdout
+                        try:
+                            with open(httpx_output_file, 'w', encoding='utf-8') as f:
+                                f.write(stdout_content)
+                            print(f"HTTPX: Arquivo criado manualmente: {httpx_output_file}")
+                        except Exception as e:
+                            print(f"HTTPX: Erro ao criar arquivo manualmente: {e}")
+                            return {"status": "error", "error": f"Failed to create output file: {e}"}
+                        
+                        # Limpar arquivo do subfinder
+                        try:
+                            os.unlink(subfinder_file)
+                        except:
+                            pass
+                        
+                        return {
+                            "status": "success", 
+                            "live_hosts": live_hosts,
+                            "output_file": httpx_output_file
+                        }
+                    else:
+                        print("HTTPX: Arquivo de saída não foi criado e sem stdout")
+                        return {"status": "error", "error": "HTTPX output file not created and no stdout"}
             else:
                 error_msg = stderr.decode().strip()
                 if not error_msg:
@@ -373,7 +401,7 @@ class HawksScanner:
                         content = f.read().strip()
                         if content:
                             live_hosts = [line.strip() for line in content.split('\n') if line.strip()]
-                            print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos")
+                            print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos (via arquivo)")
                             
                             return {
                                 "status": "success", 
@@ -387,7 +415,29 @@ class HawksScanner:
                                 pass
                             return {"status": "error", "error": "No live hosts found"}
                 else:
-                    return {"status": "error", "error": "HTTPX output file not created"}
+                    # Arquivo não foi criado, usar stdout
+                    stdout_content = stdout.decode().strip()
+                    if stdout_content:
+                        print("HTTPX: Arquivo não criado, usando stdout")
+                        live_hosts = [line.strip() for line in stdout_content.split('\n') if line.strip()]
+                        print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos (via stdout)")
+                        
+                        # Criar arquivo manualmente
+                        try:
+                            with open(httpx_output_file, 'w', encoding='utf-8') as f:
+                                f.write(stdout_content)
+                            print(f"HTTPX: Arquivo criado manualmente: {httpx_output_file}")
+                        except Exception as e:
+                            print(f"HTTPX: Erro ao criar arquivo: {e}")
+                            return {"status": "error", "error": f"Failed to create output file: {e}"}
+                        
+                        return {
+                            "status": "success", 
+                            "live_hosts": live_hosts,
+                            "output_file": httpx_output_file
+                        }
+                    else:
+                        return {"status": "error", "error": "HTTPX output file not created and no stdout"}
             else:
                 error_msg = stderr.decode().strip()
                 return {"status": "error", "error": error_msg}
