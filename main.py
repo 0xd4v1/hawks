@@ -122,7 +122,12 @@ async def targets_page(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/login")
     
     targets = db.query(HawksTargetDB).all()
-    return templates.TemplateResponse("targets.html", {"request": request, "targets": targets})
+    queue_status = hawks_scanner.get_queue_status()
+    return templates.TemplateResponse("targets.html", {
+        "request": request, 
+        "targets": targets,
+        "queue_status": queue_status
+    })
 
 @app.post("/targets")
 async def create_target(request: Request, domain_ip: str = Form(...), db: Session = Depends(get_db)):
@@ -512,6 +517,102 @@ async def get_target_status(request: Request, target_id: int, db: Session = Depe
         "scan_status": target.scan_status,
         "last_scan": target.last_scan.isoformat() if target.last_scan else None
     }
+
+@app.post("/targets/upload")
+async def upload_targets(
+    request: Request, 
+    file: UploadFile = File(...), 
+    db: Session = Depends(get_db)
+):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    
+    if not file.filename.endswith(('.txt', '.csv', '.list')):
+        raise HTTPException(status_code=400, detail="Apenas arquivos .txt, .csv ou .list são aceitos")
+    
+    try:
+        contents = await file.read()
+        domains_text = contents.decode("utf-8")
+        
+        # Processar linhas do arquivo
+        domains = []
+        for line in domains_text.split('\n'):
+            domain = line.strip()
+            if domain and not domain.startswith('#'):  # Ignorar comentários
+                # Remover http/https se presente
+                if domain.startswith(('http://', 'https://')):
+                    domain = domain.split('://', 1)[1]
+                if '/' in domain:
+                    domain = domain.split('/')[0]
+                domains.append(domain)
+        
+        # Adicionar domínios únicos ao banco
+        added_count = 0
+        for domain in set(domains):  # Remove duplicatas
+            existing = db.query(HawksTargetDB).filter(HawksTargetDB.domain_ip == domain).first()
+            if not existing:
+                target = HawksTargetDB(domain_ip=domain)
+                db.add(target)
+                added_count += 1
+        
+        db.commit()
+        return RedirectResponse(url=f"/targets?message={added_count}_targets_added", status_code=302)
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao processar arquivo: {str(e)}")
+
+@app.post("/targets/scan-selected")
+async def scan_selected_targets(
+    request: Request,
+    target_ids: List[int] = Form(...),
+    db: Session = Depends(get_db)
+):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Atualizar status dos targets selecionados
+    for target_id in target_ids:
+        target = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+        if target:
+            target.scan_status = "queued"
+            target.last_scan = datetime.utcnow()
+    db.commit()
+    
+    # Adicionar à fila de scan
+    await hawks_scanner.scan_multiple_targets(target_ids, db)
+    
+    return {"status": "queued", "targets_count": len(target_ids)}
+
+@app.post("/targets/scan-all")
+async def scan_all_targets(request: Request, db: Session = Depends(get_db)):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Pegar todos os targets
+    targets = db.query(HawksTargetDB).all()
+    target_ids = [t.id for t in targets]
+    
+    # Atualizar status
+    for target in targets:
+        target.scan_status = "queued"
+        target.last_scan = datetime.utcnow()
+    db.commit()
+    
+    # Adicionar à fila de scan
+    await hawks_scanner.scan_multiple_targets(target_ids, db)
+    
+    return {"status": "queued", "targets_count": len(target_ids)}
+
+@app.get("/api/queue-status")
+async def get_queue_status(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    return hawks_scanner.get_queue_status()
 
 if __name__ == "__main__":
     import uvicorn

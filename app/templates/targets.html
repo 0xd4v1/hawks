@@ -36,25 +36,86 @@
             </div>
 
             <div class="mb-6 bg-white shadow border border-gray-200 rounded-lg p-6">
-                <h3 class="text-lg font-medium text-black mb-4">Adicionar Novo Alvo</h3>
-                <form action="/targets" method="POST" class="flex gap-4">
-                    <input type="text" name="domain_ip" placeholder="exemplo.com ou 192.168.1.1" required
-                           class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
-                    <button type="submit" 
-                            class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">
-                        Adicionar
-                    </button>
-                </form>
+                <h3 class="text-lg font-medium text-black mb-4">Adicionar Alvos</h3>
+                
+                <!-- Adicionar Único -->
+                <div class="mb-4">
+                    <h4 class="text-md font-medium text-gray-800 mb-2">Alvo Individual</h4>
+                    <form action="/targets" method="POST" class="flex gap-4">
+                        <input type="text" name="domain_ip" placeholder="exemplo.com ou 192.168.1.1" required
+                               class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
+                        <button type="submit" 
+                                class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">
+                            Adicionar
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Upload de Lista -->
+                <div class="border-t pt-4">
+                    <h4 class="text-md font-medium text-gray-800 mb-2">Upload de Lista</h4>
+                    <form action="/targets/upload" method="POST" enctype="multipart/form-data" class="flex gap-4">
+                        <input type="file" name="file" accept=".txt,.csv,.list" required
+                               class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
+                        <button type="submit" 
+                                class="px-4 py-2 bg-gray-800 text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-800">
+                            Upload
+                        </button>
+                    </form>
+                    <p class="text-xs text-gray-500 mt-1">Formatos aceitos: .txt, .csv, .list (um domínio por linha)</p>
+                </div>
+            </div>
+
+            <!-- Status da Fila -->
+            <div class="mb-6 bg-white shadow border border-gray-200 rounded-lg p-6">
+                <h3 class="text-lg font-medium text-black mb-4">Status da Fila de Scans</h3>
+                <div class="grid grid-cols-4 gap-4 text-center">
+                    <div class="bg-gray-50 p-3 rounded">
+                        <div class="text-2xl font-bold text-black queue-status-active">{{ queue_status.active_scans }}</div>
+                        <div class="text-sm text-gray-600">Ativos</div>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded">
+                        <div class="text-2xl font-bold text-gray-600 queue-status-queued">{{ queue_status.queued_scans }}</div>
+                        <div class="text-sm text-gray-600">Na Fila</div>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded">
+                        <div class="text-2xl font-bold text-blue-600">{{ queue_status.max_concurrent }}</div>
+                        <div class="text-sm text-gray-600">Máx Simultâneos</div>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded">
+                        <div class="text-2xl font-bold text-green-600">{{ queue_status.scan_threads }}</div>
+                        <div class="text-sm text-gray-600">Threads</div>
+                    </div>
+                </div>
             </div>
 
             <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
                 <div class="px-6 py-4 border-b border-gray-200">
-                    <h3 class="text-lg font-medium text-black">Lista de Alvos</h3>
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-lg font-medium text-black">Lista de Alvos</h3>
+                        <div class="flex gap-2">
+                            <button onclick="scanSelected()" 
+                                    class="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+                                Scan Selecionados
+                            </button>
+                            <button onclick="scanAll()" 
+                                    class="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700">
+                                Scan Todos
+                            </button>
+                            <button onclick="selectAll()" 
+                                    class="px-3 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-700">
+                                Selecionar Todos
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
                             <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    <input type="checkbox" id="selectAllCheckbox" onchange="toggleAll()">
+                                </th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domínio/IP</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Último Scan</th>
@@ -64,12 +125,17 @@
                         <tbody class="bg-white divide-y divide-gray-200">
                             {% for target in targets %}
                             <tr>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <input type="checkbox" class="target-checkbox" value="{{ target.id }}">
+                                </td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-black">{{ target.domain_ip }}</td>
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full 
                                         {% if target.scan_status == 'pending' %}bg-gray-100 text-gray-800
-                                        {% elif target.scan_status == 'running' %}bg-gray-200 text-gray-900
-                                        {% elif target.scan_status == 'completed' %}bg-gray-100 text-black
+                                        {% elif target.scan_status == 'running' %}bg-blue-200 text-blue-900
+                                        {% elif target.scan_status == 'queued' %}bg-yellow-200 text-yellow-900
+                                        {% elif target.scan_status == 'completed' %}bg-green-100 text-green-800
+                                        {% elif target.scan_status == 'error' %}bg-red-100 text-red-800
                                         {% else %}bg-gray-200 text-gray-600{% endif %}">
                                         {{ target.scan_status }}
                                     </span>
@@ -112,16 +178,100 @@
     </div>
 
     <script>
+        // Funções de seleção
+        function toggleAll() {
+            const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+            const checkboxes = document.querySelectorAll('.target-checkbox');
+            
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = selectAllCheckbox.checked;
+            });
+        }
+
+        function selectAll() {
+            const checkboxes = document.querySelectorAll('.target-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = true;
+            });
+            document.getElementById('selectAllCheckbox').checked = true;
+        }
+
+        // Funções de scan
+        async function scanSelected() {
+            const selectedTargets = Array.from(document.querySelectorAll('.target-checkbox:checked')).map(cb => cb.value);
+            
+            if (selectedTargets.length === 0) {
+                alert('Selecione pelo menos um alvo para scan');
+                return;
+            }
+
+            try {
+                const formData = new FormData();
+                selectedTargets.forEach(id => formData.append('target_ids', id));
+
+                const response = await fetch('/targets/scan-selected', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    alert(`${result.targets_count} alvos adicionados à fila de scan!`);
+                    location.reload();
+                } else {
+                    alert('Erro ao iniciar scan');
+                }
+            } catch (error) {
+                alert('Erro: ' + error.message);
+            }
+        }
+
+        async function scanAll() {
+            if (confirm('Tem certeza que deseja adicionar TODOS os alvos à fila de scan?')) {
+                try {
+                    const response = await fetch('/targets/scan-all', {
+                        method: 'POST'
+                    });
+
+                    if (response.ok) {
+                        const result = await response.json();
+                        alert(`${result.targets_count} alvos adicionados à fila de scan!`);
+                        location.reload();
+                    } else {
+                        alert('Erro ao iniciar scan');
+                    }
+                } catch (error) {
+                    alert('Erro: ' + error.message);
+                }
+            }
+        }
+
         async function scanTarget(targetId) {
             try {
                 const response = await fetch(`/targets/${targetId}/scan`, {
                     method: 'POST'
                 });
                 if (response.ok) {
-                    alert('Scan iniciado com sucesso!');
+                    alert('Scan adicionado à fila!');
                     location.reload();
                 } else {
                     alert('Erro ao iniciar scan');
+                }
+            } catch (error) {
+                alert('Erro: ' + error.message);
+            }
+        }
+
+        async function stopScan(targetId) {
+            try {
+                const response = await fetch(`/targets/${targetId}/stop-scan`, {
+                    method: 'POST'
+                });
+                if (response.ok) {
+                    alert('Scan parado!');
+                    location.reload();
+                } else {
+                    alert('Erro ao parar scan');
                 }
             } catch (error) {
                 alert('Erro: ' + error.message);
@@ -145,23 +295,23 @@
             }
         }
 
-        async function stopScan(targetId) {
-            if (confirm('Tem certeza que deseja parar o scan?')) {
-                try {
-                    const response = await fetch(`/targets/${targetId}/stop-scan`, {
-                        method: 'POST'
-                    });
-                    if (response.ok) {
-                        alert('Scan parado com sucesso!');
-                        location.reload();
-                    } else {
-                        alert('Erro ao parar scan');
-                    }
-                } catch (error) {
-                    alert('Erro: ' + error.message);
+        // Auto-refresh do status da fila a cada 10 segundos
+        setInterval(async () => {
+            try {
+                const response = await fetch('/api/queue-status');
+                if (response.ok) {
+                    const status = await response.json();
+                    // Atualizar elementos do DOM se necessário
+                    const activeElement = document.querySelector('.queue-status-active');
+                    const queuedElement = document.querySelector('.queue-status-queued');
+                    
+                    if (activeElement) activeElement.textContent = status.active_scans;
+                    if (queuedElement) queuedElement.textContent = status.queued_scans;
                 }
+            } catch (error) {
+                console.log('Erro ao atualizar status da fila:', error);
             }
-        }
+        }, 10000);
     </script>
 </body>
 </html>
