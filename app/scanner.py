@@ -494,71 +494,48 @@ class HawksScanner:
                 if not nuclei_path:
                     return {"status": "error", "error": "NUCLEI not found in PATH"}
             
-            # Verificar se há templates custom disponíveis
+            # Usar APENAS templates custom
             custom_templates_dir = os.path.join(os.getcwd(), "templates", "custom")
-            template_configs = []
             
-            # 1. PRIORITÁRIO: Templates custom se disponíveis (usar APENAS eles)
-            if os.path.exists(custom_templates_dir) and os.listdir(custom_templates_dir):
+            # Criar diretório se não existir
+            if not os.path.exists(custom_templates_dir):
+                os.makedirs(custom_templates_dir, exist_ok=True)
+                print(f"NUCLEI: Criado diretório de templates custom: {custom_templates_dir}")
+            
+            # Verificar se há templates YAML na pasta custom
+            yaml_files = []
+            if os.path.exists(custom_templates_dir):
                 yaml_files = [f for f in os.listdir(custom_templates_dir) if f.endswith('.yaml') or f.endswith('.yml')]
-                if yaml_files:
-                    print(f"NUCLEI: Encontrados {len(yaml_files)} templates custom: {yaml_files}")
-                    template_configs.append(("custom-only", ["-t", custom_templates_dir]))
-                    # NÃO adicionar outras configurações quando há templates custom
-                else:
-                    print("NUCLEI: Diretório custom existe mas não contém templates YAML")
-                    # Adicionar fallbacks apenas se não há templates custom
-                    template_configs.append(("default", ["-t", "~/.nuclei-templates/"]))
-                    template_configs.append(("auto", []))
-            else:
-                print("NUCLEI: Diretório custom não existe, usando templates padrão")
-                # Adicionar fallbacks apenas se não há templates custom
-                template_configs.append(("default", ["-t", "~/.nuclei-templates/"]))
-                template_configs.append(("auto", []))
+            
+            if not yaml_files:
+                print(f"NUCLEI: Nenhum template encontrado em {custom_templates_dir}")
+                print("NUCLEI: Adicione templates .yaml na pasta ./templates/custom/ para executar scans")
+                return {"status": "error", "error": "No templates found in ./templates/custom/"}
+            
+            print(f"NUCLEI: Encontrados {len(yaml_files)} templates custom: {yaml_files}")
+            template_configs = [("custom-only", ["-t", custom_templates_dir])]
             
             # Tentar cada configuração até uma funcionar
             for config_name, template_args in template_configs:
                 print(f"NUCLEI: Tentando configuração '{config_name}'...")
                 
-                # Usar comando com pipe: cat arquivo | nuclei
-                nuclei_cmd = [nuclei_path, "-json", "-silent", "-nc"]
+                # Montar comando nuclei
+                nuclei_cmd = [nuclei_path, "-jsonl", "-silent", "-nc", "-l", hosts_file]
                 
                 # Adicionar templates se especificados
                 if template_args:
                     nuclei_cmd.extend(template_args)
                 
-                # Comando completo: cat hosts_file | nuclei args
-                cat_cmd = ["cat", hosts_file]
-                
-                print(f"NUCLEI: Comando: cat {hosts_file} | {' '.join(nuclei_cmd)}")
+                print(f"NUCLEI: Comando: {' '.join(nuclei_cmd)}")
                 
                 try:
-                    # Executar cat primeiro
-                    cat_process = await asyncio.create_subprocess_exec(
-                        *cat_cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    
-                    # Executar nuclei com stdin do cat
-                    nuclei_process = await asyncio.create_subprocess_exec(
+                    # Executar nuclei diretamente usando o arquivo de hosts
+                    process = await asyncio.create_subprocess_exec(
                         *nuclei_cmd,
-                        stdin=cat_process.stdout,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         env=os.environ.copy()
                     )
-                    
-                    # Fechar stdout do cat para que o nuclei receba EOF
-                    cat_process.stdout.close()
-                    
-                    # Aguardar ambos os processos
-                    cat_stdout, cat_stderr = await cat_process.communicate()
-                    process = nuclei_process
-                    
-                    # Aguardar ambos os processos
-                    cat_stdout, cat_stderr = await cat_process.communicate()
-                    process = nuclei_process
                     
                     # Implementar timeout manualmente para o nuclei
                     try:
@@ -609,11 +586,13 @@ class HawksScanner:
                         return {"status": "success", "results": results, "config_used": config_name}
                     
                     elif process.returncode == 2:
-                        print(f"NUCLEI: Configuração '{config_name}' falhou com return code 2, tentando próxima...")
+                        print(f"NUCLEI: Configuração '{config_name}' falhou com return code 2 (template não encontrado), tentando próxima...")
                         continue  # Tentar próxima configuração
                     
                     else:
                         print(f"NUCLEI: Configuração '{config_name}' falhou com return code {process.returncode}")
+                        error_output = stderr_content[:500] if stderr_content else "No error output"
+                        print(f"NUCLEI: Error output: {error_output}")
                         continue  # Tentar próxima configuração
                         
                 except asyncio.TimeoutError:
