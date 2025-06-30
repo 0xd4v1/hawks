@@ -19,6 +19,13 @@ if ! command -v pip3 &> /dev/null; then
 fi
 echo "pip3 found"
 
+# Check git
+if ! command -v git &> /dev/null; then
+    echo "Error: git not found. Please install git"
+    exit 1
+fi
+echo "git found"
+
 # Install/check Go
 if ! command -v go &> /dev/null; then
     echo "Installing Go..."

@@ -106,6 +106,27 @@ requests:
 
             <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
                 <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-black">Clonar do GitHub</h3>
+                    <p class="mt-1 text-sm text-gray-600">Clone templates diretamente de um repositório GitHub</p>
+                </div>
+                <div class="p-6">
+                    <form action="/templates/clone" method="POST" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-black mb-2">URL do Repositório GitHub</label>
+                            <input type="url" name="github_url" required placeholder="https://github.com/usuario/repositorio"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
+                            <p class="mt-1 text-xs text-gray-500">Exemplo: https://github.com/projectdiscovery/nuclei-templates</p>
+                        </div>
+                        <button type="submit" 
+                                class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">
+                            Clonar Templates
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200">
                     <h3 class="text-lg font-medium text-black">Templates Existentes</h3>
                 </div>
                 <div class="overflow-x-auto">

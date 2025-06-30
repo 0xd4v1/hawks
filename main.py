@@ -12,6 +12,9 @@ import zipfile
 import yaml
 import tempfile
 import shutil
+import git
+import os
+from urllib.parse import urlparse
 from typing import List, Optional
 
 from app.database import get_db, init_db, HawksTarget as HawksTargetDB, HawksTemplate as HawksTemplateDB, HawksScanResult
@@ -271,6 +274,73 @@ async def upload_template(
         raise HTTPException(status_code=400, detail="File type not supported")
     
     return RedirectResponse(url="/templates", status_code=302)
+
+@app.post("/templates/clone")
+async def clone_templates_from_github(
+    request: Request, 
+    github_url: str = Form(...), 
+    db: Session = Depends(get_db)
+):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    
+    try:
+        # Validar URL do GitHub
+        parsed_url = urlparse(github_url)
+        if 'github.com' not in parsed_url.netloc:
+            raise HTTPException(status_code=400, detail="URL deve ser do GitHub")
+        
+        # Criar diretório temporário para clone
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            try:
+                # Clonar repositório
+                repo = git.Repo.clone_from(github_url, tmpdirname)
+                
+                # Procurar por arquivos YAML no repositório
+                yaml_files = []
+                for root, dirs, files in os.walk(tmpdirname):
+                    for file in files:
+                        if file.endswith('.yaml') or file.endswith('.yml'):
+                            yaml_files.append(os.path.join(root, file))
+                
+                # Adicionar templates ao banco
+                templates_added = 0
+                for yaml_file in yaml_files:
+                    try:
+                        with open(yaml_file, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        
+                        # Nome do template baseado no caminho relativo
+                        rel_path = os.path.relpath(yaml_file, tmpdirname)
+                        template_name = rel_path.replace(os.sep, '_').replace('.yaml', '').replace('.yml', '')
+                        
+                        # Verificar se já existe
+                        existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == template_name).first()
+                        if not existing:
+                            template = HawksTemplateDB(
+                                name=template_name,
+                                content=content,
+                                enabled=True,
+                                order_index=0
+                            )
+                            db.add(template)
+                            templates_added += 1
+                    except Exception as e:
+                        continue
+                
+                db.commit()
+                
+                if templates_added > 0:
+                    return RedirectResponse(url=f"/templates?message={templates_added}_templates_cloned", status_code=302)
+                else:
+                    return RedirectResponse(url="/templates?error=no_templates_found", status_code=302)
+                    
+            except git.exc.GitCommandError as e:
+                raise HTTPException(status_code=400, detail="Erro ao clonar repositório")
+                
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro: {str(e)}")
 
 @app.get("/api/targets", response_model=List[HawksTarget])
 async def api_get_targets(request: Request, db: Session = Depends(get_db)):
