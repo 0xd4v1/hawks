@@ -487,37 +487,122 @@ class HawksScanner:
             nuclei_path = self._get_tool_path("nuclei")
             print(f"NUCLEI: Executável: {nuclei_path}")
             
-            # Comando básico do nuclei
-            cmd = [nuclei_path, "-l", hosts_file, "-json", "-silent", "-nc"]
+            # Verificar se nuclei existe
+            if not os.path.exists(nuclei_path) and nuclei_path == "nuclei":
+                import shutil
+                nuclei_path = shutil.which("nuclei")
+                if not nuclei_path:
+                    return {"status": "error", "error": "NUCLEI not found in PATH"}
             
-            # Usar templates custom se disponíveis na pasta templates/custom
+            # Verificar se há templates custom disponíveis
             custom_templates_dir = os.path.join(os.getcwd(), "templates", "custom")
+            template_configs = []
+            
+            # 1. PRIORITÁRIO: Templates custom se disponíveis (usar APENAS eles)
             if os.path.exists(custom_templates_dir) and os.listdir(custom_templates_dir):
                 yaml_files = [f for f in os.listdir(custom_templates_dir) if f.endswith('.yaml') or f.endswith('.yml')]
                 if yaml_files:
-                    cmd.extend(["-t", custom_templates_dir])
-                    print(f"NUCLEI: Usando {len(yaml_files)} templates custom")
+                    print(f"NUCLEI: Encontrados {len(yaml_files)} templates custom: {yaml_files}")
+                    template_configs.append(("custom-only", ["-t", custom_templates_dir]))
+                    # NÃO adicionar outras configurações quando há templates custom
                 else:
-                    # Usar templates padrão se não há custom
-                    cmd.extend(["-t", "~/.nuclei-templates/"])
-                    print("NUCLEI: Usando templates padrão")
+                    print("NUCLEI: Diretório custom existe mas não contém templates YAML")
+                    # Adicionar fallbacks apenas se não há templates custom
+                    template_configs.append(("default", ["-t", "~/.nuclei-templates/"]))
+                    template_configs.append(("auto", []))
             else:
-                # Usar templates padrão se pasta custom não existe ou está vazia
-                cmd.extend(["-t", "~/.nuclei-templates/"])
-                print("NUCLEI: Usando templates padrão")
+                print("NUCLEI: Diretório custom não existe, usando templates padrão")
+                # Adicionar fallbacks apenas se não há templates custom
+                template_configs.append(("default", ["-t", "~/.nuclei-templates/"]))
+                template_configs.append(("auto", []))
             
-            print(f"NUCLEI: Comando: {' '.join(cmd)}")
+            # Tentar cada configuração até uma funcionar
+            for config_name, template_args in template_configs:
+                print(f"NUCLEI: Tentando configuração '{config_name}'...")
+                
+                # Comando básico do nuclei
+                cmd = [nuclei_path, "-l", hosts_file, "-json", "-silent", "-nc"]
+                
+                # Adicionar templates se especificados
+                if template_args:
+                    cmd.extend(template_args)
+                
+                print(f"NUCLEI: Comando: {' '.join(cmd)}")
+                
+                try:
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd, 
+                        stdout=asyncio.subprocess.PIPE, 
+                        stderr=asyncio.subprocess.PIPE,
+                        env=os.environ.copy()
+                    )
+                    
+                    # Implementar timeout manualmente
+                    try:
+                        stdout, stderr = await asyncio.wait_for(
+                            process.communicate(), 
+                            timeout=300  # 5 minutos
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await process.wait()
+                        raise asyncio.TimeoutError("Nuclei timeout after 5 minutes")
+                    
+                    print(f"NUCLEI: Return code: {process.returncode}")
+                    stderr_content = stderr.decode().strip()
+                    if stderr_content:
+                        print(f"NUCLEI: Stderr: {stderr_content[:200]}...")
+                    
+                    # Nuclei pode retornar 0 (sucesso) ou 1 (quando não há resultados)
+                    if process.returncode in [0, 1]:
+                        results = []
+                        output_text = stdout.decode().strip()
+                        
+                        if output_text:
+                            output_lines = output_text.split('\n')
+                            print(f"NUCLEI: Processando {len(output_lines)} linhas de saída com configuração '{config_name}'...")
+                            
+                            for line in output_lines:
+                                line = line.strip()
+                                if line and line.startswith('{'):
+                                    try:
+                                        result = json.loads(line)
+                                        results.append(result)
+                                        # Log específico para detecção de .git
+                                        if result.get('template-id') == 'git-exposure-check':
+                                            print(f"NUCLEI: ⚠️  EXPOSIÇÃO DE .GIT DETECTADA em {result.get('matched-at', 'unknown')}")
+                                    except json.JSONDecodeError:
+                                        continue
+                        
+                        print(f"NUCLEI: Encontradas {len(results)} vulnerabilidades com configuração '{config_name}'")
+                        
+                        # Limpar arquivo temporário se foi criado por nós
+                        if cleanup_file and os.path.exists(hosts_file):
+                            try:
+                                os.unlink(hosts_file)
+                            except:
+                                pass
+                        
+                        return {"status": "success", "results": results, "config_used": config_name}
+                    
+                    elif process.returncode == 2:
+                        print(f"NUCLEI: Configuração '{config_name}' falhou com return code 2, tentando próxima...")
+                        continue  # Tentar próxima configuração
+                    
+                    else:
+                        print(f"NUCLEI: Configuração '{config_name}' falhou com return code {process.returncode}")
+                        continue  # Tentar próxima configuração
+                        
+                except asyncio.TimeoutError:
+                    print(f"NUCLEI: Timeout na configuração '{config_name}', tentando próxima...")
+                    continue
+                except Exception as e:
+                    print(f"NUCLEI: Erro na configuração '{config_name}': {e}")
+                    continue
             
-            process = await asyncio.create_subprocess_exec(
-                *cmd, 
-                stdout=asyncio.subprocess.PIPE, 
-                stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy()
-            )
-            stdout, stderr = await process.communicate()
-            
-            print(f"NUCLEI: Return code: {process.returncode}")
-            print(f"NUCLEI: Stderr: {stderr.decode()}")
+            # Se chegou aqui, todas as configurações falharam
+            error_msg = "All nuclei configurations failed"
+            print(f"NUCLEI: {error_msg}")
             
             # Limpar arquivo temporário se foi criado por nós
             if cleanup_file and os.path.exists(hosts_file):
@@ -526,32 +611,7 @@ class HawksScanner:
                 except:
                     pass
             
-            # Nuclei pode retornar 0 (sucesso) ou 1 (quando não há resultados)
-            if process.returncode in [0, 1]:
-                results = []
-                output_text = stdout.decode().strip()
-                
-                if output_text:
-                    output_lines = output_text.split('\n')
-                    print(f"NUCLEI: Processando {len(output_lines)} linhas de saída...")
-                    
-                    for line in output_lines:
-                        line = line.strip()
-                        if line and line.startswith('{'):
-                            try:
-                                result = json.loads(line)
-                                results.append(result)
-                            except json.JSONDecodeError:
-                                continue
-                
-                print(f"NUCLEI: Encontradas {len(results)} vulnerabilidades")
-                return {"status": "success", "results": results}
-            else:
-                error_msg = stderr.decode().strip()
-                if not error_msg:
-                    error_msg = f"Nuclei failed with return code {process.returncode}"
-                print(f"NUCLEI: Erro - {error_msg}")
-                return {"status": "error", "error": error_msg}
+            return {"status": "error", "error": error_msg}
                 
         except Exception as e:
             print(f"NUCLEI: Exception - {str(e)}")

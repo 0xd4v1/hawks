@@ -1,0 +1,53 @@
+id: git-exposure-check
+
+info:
+  name: Git Repository Exposure
+  author: Hawks Scanner
+  severity: medium
+  description: Detects exposed Git repositories by checking for accessible .git directories
+  reference:
+    - https://owasp.org/www-community/attacks/Forced_browsing
+  classification:
+    cvss-metrics: CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N
+    cvss-score: 5.3
+    cwe-id: CWE-200
+  tags: git,exposure,misconfiguration,directory-traversal
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/.git/"
+      - "{{BaseURL}}/.git/config"
+      - "{{BaseURL}}/.git/HEAD"
+      - "{{BaseURL}}/.git/logs/HEAD"
+
+    matchers-condition: or
+    matchers:
+      - type: status
+        status:
+          - 200
+          - 403
+          - 301
+          - 302
+
+      - type: word
+        words:
+          - "[core]"
+          - "repositoryformatversion"
+          - "ref: refs/heads/"
+          - ".git/logs/HEAD"
+        condition: or
+
+      - type: regex
+        regex:
+          - "Index of /\\.git"
+          - "\\[core\\]"
+          - "ref: refs/heads/[a-zA-Z0-9]+"
+        condition: or
+
+    extractors:
+      - type: regex
+        part: body
+        group: 1
+        regex:
+          - 'ref: refs/heads/([a-zA-Z0-9-_]+)'
