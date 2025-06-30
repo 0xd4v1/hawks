@@ -227,6 +227,57 @@ async def templates_page(request: Request, db: Session = Depends(get_db)):
     templates_list = db.query(HawksTemplateDB).order_by(HawksTemplateDB.order_index).all()
     return templates.TemplateResponse("templates.html", {"request": request, "templates": templates_list})
 
+@app.get("/nuclei-results", response_class=HTMLResponse)
+async def nuclei_results_page(request: Request, db: Session = Depends(get_db)):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    
+    # Buscar apenas resultados do nuclei
+    nuclei_results = db.query(HawksScanResult).filter(
+        HawksScanResult.scan_type == "nuclei",
+        HawksScanResult.status == "success"
+    ).order_by(HawksScanResult.started_at.desc()).all()
+    
+    # Buscar informações dos targets
+    targets_info = {}
+    for result in nuclei_results:
+        if result.target_id not in targets_info:
+            target = db.query(HawksTargetDB).filter(HawksTargetDB.id == result.target_id).first()
+            targets_info[result.target_id] = target.domain_ip if target else "Target removido"
+    
+    # Processar os resultados para extrair vulnerabilidades
+    processed_results = []
+    for result in nuclei_results:
+        try:
+            result_data = json.loads(result.result_data)
+            vulnerabilities = result_data.get("results", [])
+            
+            for vuln in vulnerabilities:
+                processed_results.append({
+                    "target_name": targets_info[result.target_id],
+                    "target_id": result.target_id,
+                    "scan_date": result.started_at,
+                    "template_id": vuln.get("template-id", "N/A"),
+                    "template_name": vuln.get("info", {}).get("name", "N/A"),
+                    "severity": vuln.get("info", {}).get("severity", "info"),
+                    "matched_at": vuln.get("matched-at", "N/A"),
+                    "host": vuln.get("host", "N/A"),
+                    "type": vuln.get("type", "N/A"),
+                    "vulnerability": vuln
+                })
+        except (json.JSONDecodeError, KeyError):
+            continue
+    
+    # Ordenar por data mais recente
+    processed_results.sort(key=lambda x: x["scan_date"], reverse=True)
+    
+    return templates.TemplateResponse("nuclei_results.html", {
+        "request": request, 
+        "nuclei_results": processed_results,
+        "total_vulnerabilities": len(processed_results)
+    })
+
 @app.post("/templates")
 async def create_template(
     request: Request,

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hawks - Resultados Nuclei</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-white">
+    <nav class="border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <h1 class="text-xl font-bold">Hawks</h1>
+                    </div>
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                        <a href="/dashboard" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Dashboard</a>
+                        <a href="/targets" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Alvos</a>
+                        <a href="/scans" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Scans</a>
+                        <a href="/templates" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Templates</a>
+                        <a href="/nuclei-results" class="border-black text-black inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Nuclei</a>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <a href="/logout" class="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm font-medium">Sair</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div class="px-4 py-6 sm:px-0">
+            <div class="mb-8">
+                <h2 class="text-2xl font-bold text-black">Resultados do Nuclei</h2>
+                <p class="mt-1 text-sm text-gray-600">Vulnerabilidades detectadas em todos os scans</p>
+                <div class="mt-4">
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-black text-white">
+                        Total: {{ total_vulnerabilities }} vulnerabilidades
+                    </span>
+                </div>
+            </div>
+
+            {% if nuclei_results %}
+            <!-- Filtros -->
+            <div class="mb-6 bg-white shadow border border-gray-200 rounded-lg p-4">
+                <div class="flex flex-wrap gap-4 items-center">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Filtrar por Severidade</label>
+                        <select id="severityFilter" class="px-3 py-2 border border-gray-300 rounded-md text-sm">
+                            <option value="">Todas</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                            <option value="info">Info</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Filtrar por Target</label>
+                        <select id="targetFilter" class="px-3 py-2 border border-gray-300 rounded-md text-sm">
+                            <option value="">Todos os targets</option>
+                            {% for result in nuclei_results %}
+                            <option value="{{ result.target_name }}">{{ result.target_name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Pesquisar</label>
+                        <input type="text" id="searchInput" placeholder="Template, URL, etc..." 
+                               class="px-3 py-2 border border-gray-300 rounded-md text-sm">
+                    </div>
+                    <div class="flex items-end">
+                        <button onclick="clearFilters()" 
+                                class="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 text-sm">
+                            Limpar Filtros
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Resultados -->
+            <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Target</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vulnerabilidade</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severidade</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">URL</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Template</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200" id="resultsTable">
+                            {% for result in nuclei_results %}
+                            <tr class="result-row" data-severity="{{ result.severity }}" data-target="{{ result.target_name }}">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <div class="text-sm font-medium text-black">{{ result.target_name }}</div>
+                                    <div class="text-sm text-gray-500">ID: {{ result.target_id }}</div>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="text-sm font-medium text-black">{{ result.template_name }}</div>
+                                    <div class="text-sm text-gray-500">{{ result.template_id }}</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full
+                                        {% if result.severity == 'critical' %}bg-red-100 text-red-800
+                                        {% elif result.severity == 'high' %}bg-orange-100 text-orange-800
+                                        {% elif result.severity == 'medium' %}bg-yellow-100 text-yellow-800
+                                        {% elif result.severity == 'low' %}bg-blue-100 text-blue-800
+                                        {% else %}bg-gray-100 text-gray-800{% endif %}">
+                                        {{ result.severity.upper() }}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4">
+                                    <div class="text-sm text-black break-all">{{ result.matched_at }}</div>
+                                    <div class="text-sm text-gray-500">{{ result.host }}</div>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {{ result.template_id }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {{ result.scan_date.strftime('%d/%m/%Y %H:%M') }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <button onclick="viewVulnerability(this)" 
+                                            data-vulnerability="{{ result.vulnerability | tojson | e }}"
+                                            class="bg-black text-white px-3 py-1 rounded text-xs hover:bg-gray-800 mr-2">
+                                        Detalhes
+                                    </button>
+                                    <a href="/targets/{{ result.target_id }}/dashboard" 
+                                       class="bg-gray-600 text-white px-3 py-1 rounded text-xs hover:bg-gray-700">
+                                        Ver Target
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% else %}
+            <div class="bg-white shadow border border-gray-200 rounded-lg p-8 text-center">
+                <div class="text-gray-500">
+                    <h3 class="text-lg font-medium text-gray-900 mb-2">Nenhum resultado encontrado</h3>
+                    <p class="text-sm">Execute alguns scans para ver os resultados do Nuclei aqui.</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Modal para detalhes da vulnerabilidade -->
+    <div id="vulnerabilityModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50">
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-lg max-w-4xl w-full max-h-screen overflow-y-auto">
+                <div class="p-6 border-b border-gray-200">
+                    <div class="flex justify-between items-center">
+                        <h3 id="modal-title" class="text-lg font-medium text-black">Detalhes da Vulnerabilidade</h3>
+                        <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <pre id="modal-content" class="bg-gray-100 p-4 rounded text-sm overflow-x-auto"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Filtros
+        function filterResults() {
+            const severityFilter = document.getElementById('severityFilter').value;
+            const targetFilter = document.getElementById('targetFilter').value;
+            const searchInput = document.getElementById('searchInput').value.toLowerCase();
+            const rows = document.querySelectorAll('.result-row');
+
+            rows.forEach(row => {
+                const severity = row.getAttribute('data-severity');
+                const target = row.getAttribute('data-target');
+                const text = row.textContent.toLowerCase();
+
+                const matchSeverity = !severityFilter || severity === severityFilter;
+                const matchTarget = !targetFilter || target === targetFilter;
+                const matchSearch = !searchInput || text.includes(searchInput);
+
+                if (matchSeverity && matchTarget && matchSearch) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+
+        function clearFilters() {
+            document.getElementById('severityFilter').value = '';
+            document.getElementById('targetFilter').value = '';
+            document.getElementById('searchInput').value = '';
+            filterResults();
+        }
+
+        // Event listeners para filtros
+        document.getElementById('severityFilter').addEventListener('change', filterResults);
+        document.getElementById('targetFilter').addEventListener('change', filterResults);
+        document.getElementById('searchInput').addEventListener('input', filterResults);
+
+        // Modal
+        function viewVulnerability(button) {
+            const vulnerability = JSON.parse(button.getAttribute('data-vulnerability'));
+            const vulnName = vulnerability.info && vulnerability.info.name ? vulnerability.info.name : 'N/A';
+            document.getElementById('modal-title').textContent = 'Vulnerabilidade: ' + vulnName;
+            document.getElementById('modal-content').textContent = JSON.stringify(vulnerability, null, 2);
+            document.getElementById('vulnerabilityModal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('vulnerabilityModal').classList.add('hidden');
+        }
+
+        // Remover duplicatas do filtro de targets
+        const targetSelect = document.getElementById('targetFilter');
+        const seenTargets = new Set();
+        Array.from(targetSelect.options).forEach(option => {
+            if (option.value && seenTargets.has(option.value)) {
+                option.remove();
+            } else if (option.value) {
+                seenTargets.add(option.value);
+            }
+        });
+    </script>
+</body>
+</html> 
