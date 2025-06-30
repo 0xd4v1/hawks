@@ -43,7 +43,8 @@
                 <div class="mb-4">
                     <h4 class="text-md font-medium text-gray-800 mb-2">Alvo Individual</h4>
                     <form action="/targets" method="POST" class="flex gap-4">
-                        <input type="text" name="domain_ip" placeholder="exemplo.com ou 192.168.1.1" required
+                        <input type="text" name="domain_ip" placeholder="exemplo.com ou 192.168.1.1" required 
+                               maxlength="253" pattern="[a-zA-Z0-9.-]+" autocomplete="off"
                                class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
                         <button type="submit" 
                                 class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">

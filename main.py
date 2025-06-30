@@ -3,6 +3,8 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import json
@@ -14,20 +16,173 @@ import tempfile
 import shutil
 import git
 import os
+import secrets
+import hashlib
+import time
+import re
 from urllib.parse import urlparse
 from typing import List, Optional
+from passlib.context import CryptContext
+import html
 
 from app.database import get_db, init_db, HawksTarget as HawksTargetDB, HawksTemplate as HawksTemplateDB, HawksScanResult
 from app.schemas import HawksTargetCreate, HawksTarget, HawksTemplateCreate, HawksTemplate, HawksLoginRequest
 from app.scanner import hawks_scanner
 from app.config import hawks_config
 
-app = FastAPI(title="Hawks", docs_url=None, redoc_url=None)
+# Security setup
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Rate limiting storage
+login_attempts = {}
+RATE_LIMIT_ATTEMPTS = 5
+RATE_LIMIT_WINDOW = 900  # 15 minutes
+
+app = FastAPI(title="Hawks", docs_url=None, redoc_url=None, debug=False)
+
+# Security middleware
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "*.localhost"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8000", "https://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
 templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 security = HTTPBearer(auto_error=False)
 
 init_db()
+
+# Security functions
+def verify_password(plain_password, hashed_password):
+    """Verify a password against its hash"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    """Hash a password"""
+    return pwd_context.hash(password)
+
+def is_rate_limited(ip_address: str) -> bool:
+    """Check if IP is rate limited"""
+    current_time = time.time()
+    
+    # Clean old entries
+    for ip in list(login_attempts.keys()):
+        if current_time - login_attempts[ip]['last_attempt'] > RATE_LIMIT_WINDOW:
+            del login_attempts[ip]
+    
+    if ip_address not in login_attempts:
+        return False
+    
+    attempts = login_attempts[ip_address]
+    if attempts['count'] >= RATE_LIMIT_ATTEMPTS:
+        if current_time - attempts['last_attempt'] < RATE_LIMIT_WINDOW:
+            return True
+        else:
+            # Reset after window
+            del login_attempts[ip_address]
+            return False
+    
+    return False
+
+def record_failed_login(ip_address: str):
+    """Record a failed login attempt"""
+    current_time = time.time()
+    
+    if ip_address not in login_attempts:
+        login_attempts[ip_address] = {'count': 0, 'last_attempt': current_time}
+    
+    login_attempts[ip_address]['count'] += 1
+    login_attempts[ip_address]['last_attempt'] = current_time
+
+def validate_domain_input(domain: str) -> str:
+    """Validate and sanitize domain input"""
+    if not domain:
+        raise ValueError("Domain cannot be empty")
+    
+    # Remove whitespace and convert to lowercase
+    domain = domain.strip().lower()
+    
+    # Remove protocol if present
+    if domain.startswith(('http://', 'https://')):
+        domain = domain.split('://', 1)[1]
+    
+    # Remove path if present
+    if '/' in domain:
+        domain = domain.split('/')[0]
+    
+    # Basic domain validation
+    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$', domain):
+        # Try IP validation
+        ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+        if not re.match(ip_pattern, domain):
+            raise ValueError("Invalid domain or IP address format")
+    
+    return domain
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename to prevent path traversal"""
+    # Remove directory traversal attempts
+    filename = os.path.basename(filename)
+    
+    # Remove dangerous characters
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    
+    # Limit length
+    if len(filename) > 255:
+        filename = filename[:255]
+    
+    return filename
+
+def validate_yaml_content(content: str) -> bool:
+    """Validate YAML content for security"""
+    try:
+        # Parse YAML safely
+        data = yaml.safe_load(content)
+        
+        # Check for dangerous constructs
+        content_lower = content.lower()
+        dangerous_patterns = [
+            'system', 'exec', 'eval', 'import', 'subprocess',
+            '__import__', 'open(', 'file(', 'input(', 'raw_input('
+        ]
+        
+        for pattern in dangerous_patterns:
+            if pattern in content_lower:
+                return False
+        
+        return True
+    except yaml.YAMLError:
+        return False
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Add security headers to all responses"""
+    response = await call_next(request)
+    
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    
+    # CSP header
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' cdn.tailwindcss.com; "
+        "style-src 'self' 'unsafe-inline' cdn.tailwindcss.com; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["Content-Security-Policy"] = csp
+    
+    return response
 
 @app.on_event("startup")
 async def startup_event():
@@ -90,21 +245,52 @@ async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
 @app.post("/login")
-async def login(username: str = Form(...), password: str = Form(...)):
-    if username == hawks_config.admin_username and password == hawks_config.admin_password:
-        access_token_expires = timedelta(hours=24)
-        access_token = create_access_token(
-            data={"sub": username}, expires_delta=access_token_expires
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    # Get client IP
+    client_ip = request.client.host
+    
+    # Check rate limiting
+    if is_rate_limited(client_ip):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Please try again later."
         )
+    
+    # Input validation
+    if not username or not password or len(username) > 100 or len(password) > 100:
+        record_failed_login(client_ip)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Sanitize username
+    username = html.escape(username.strip())
+    
+    # Check credentials (for now using plaintext, but should use hashed passwords)
+    if username == hawks_config.admin_username and password == hawks_config.admin_password:
+        # Generate secure token
+        access_token_expires = timedelta(hours=8)  # Reduced from 24h for security
+        access_token = create_access_token(
+            data={"sub": username, "iat": time.time()}, 
+            expires_delta=access_token_expires
+        )
+        
         response = RedirectResponse(url="/dashboard", status_code=302)
         response.set_cookie(
             key="access_token", 
             value=access_token, 
             httponly=True, 
-            max_age=86400,
-            secure=False
+            max_age=28800,  # 8 hours
+            secure=True,  # Should be True in production with HTTPS
+            samesite="strict"
         )
+        
+        # Clear failed attempts on successful login
+        if client_ip in login_attempts:
+            del login_attempts[client_ip]
+        
         return response
+    
+    # Record failed attempt
+    record_failed_login(client_ip)
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 @app.get("/logout")
@@ -150,14 +336,21 @@ async def create_target(request: Request, domain_ip: str = Form(...), db: Sessio
     if not user:
         return RedirectResponse(url="/login")
     
-    existing = db.query(HawksTargetDB).filter(HawksTargetDB.domain_ip == domain_ip).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Target already exists")
+    try:
+        # Validate and sanitize domain input
+        clean_domain = validate_domain_input(domain_ip)
+        
+        existing = db.query(HawksTargetDB).filter(HawksTargetDB.domain_ip == clean_domain).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Target already exists")
+        
+        target = HawksTargetDB(domain_ip=clean_domain)
+        db.add(target)
+        db.commit()
+        return RedirectResponse(url="/targets", status_code=302)
     
-    target = HawksTargetDB(domain_ip=domain_ip)
-    db.add(target)
-    db.commit()
-    return RedirectResponse(url="/targets", status_code=302)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/targets/{target_id}/scan")
 async def scan_target(request: Request, target_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -291,12 +484,37 @@ async def create_template(
     if not user:
         return RedirectResponse(url="/login")
     
+    # Input validation
+    if not name or not content:
+        raise HTTPException(status_code=400, detail="Name and content are required")
+    
+    if len(name) > 100 or len(content) > 100000:  # Limit content size
+        raise HTTPException(status_code=400, detail="Template name or content too long")
+    
+    # Sanitize template name
+    name = sanitize_filename(name.strip())
+    if not name:
+        raise HTTPException(status_code=400, detail="Invalid template name")
+    
+    # Validate YAML content
+    if not validate_yaml_content(content):
+        raise HTTPException(status_code=400, detail="Invalid or potentially dangerous YAML content")
+    
     existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == name).first()
     if existing:
         raise HTTPException(status_code=400, detail="Template name already exists")
     
+    # Validate order_index
+    if order_index < 0 or order_index > 1000:
+        order_index = 0
+    
     # Salvar template no banco
-    template = HawksTemplateDB(name=name, content=content, enabled=enabled, order_index=order_index)
+    template = HawksTemplateDB(
+        name=html.escape(name), 
+        content=content, 
+        enabled=enabled, 
+        order_index=order_index
+    )
     db.add(template)
     db.commit()
     
@@ -304,7 +522,15 @@ async def create_template(
     try:
         custom_dir = os.path.join(os.getcwd(), "templates", "custom")
         os.makedirs(custom_dir, exist_ok=True)
-        template_file_path = os.path.join(custom_dir, f"{name}.yaml")
+        
+        # Use sanitized filename
+        safe_filename = f"{name}.yaml"
+        template_file_path = os.path.join(custom_dir, safe_filename)
+        
+        # Ensure we don't overwrite files outside the custom directory
+        if not os.path.abspath(template_file_path).startswith(os.path.abspath(custom_dir)):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        
         with open(template_file_path, 'w', encoding='utf-8') as f:
             f.write(content)
     except Exception as e:
@@ -345,48 +571,112 @@ async def upload_template(
     if not user:
         return RedirectResponse(url="/login")
     
+    # File validation
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    # Sanitize filename
+    safe_filename = sanitize_filename(file.filename)
+    if not safe_filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    # File size validation (limit to 10MB)
+    MAX_FILE_SIZE = 10 * 1024 * 1024
+    if hasattr(file, 'size') and file.size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+    
+    # Allowed file types
+    allowed_extensions = ['.yaml', '.yml', '.zip']
+    if not any(safe_filename.lower().endswith(ext) for ext in allowed_extensions):
+        raise HTTPException(status_code=400, detail="Only .yaml, .yml, and .zip files are allowed")
+    
     custom_dir = os.path.join(os.getcwd(), "templates", "custom")
     os.makedirs(custom_dir, exist_ok=True)
     
-    if file.content_type == "application/zip" or file.filename.endswith('.zip'):
+    if file.content_type == "application/zip" or safe_filename.endswith('.zip'):
         with tempfile.TemporaryDirectory() as tmpdirname:
-            zip_path = f"{tmpdirname}/{file.filename}"
-            with open(zip_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+            zip_path = f"{tmpdirname}/{safe_filename}"
             
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(tmpdirname)
-                
-                for extracted_file in zip_ref.namelist():
-                    if extracted_file.endswith(".yaml") or extracted_file.endswith(".yml"):
-                        try:
-                            with open(f"{tmpdirname}/{extracted_file}", 'r', encoding='utf-8') as yaml_file:
-                                yaml_content = yaml_file.read()
-                                template_name = os.path.basename(extracted_file).replace('.yaml', '').replace('.yml', '')
-                                
-                                # Salvar no banco
-                                existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == template_name).first()
-                                if not existing:
-                                    db_template = HawksTemplateDB(
-                                        name=template_name, 
-                                        content=yaml_content, 
-                                        enabled=True, 
-                                        order_index=0
-                                    )
-                                    db.add(db_template)
-                                    
-                                    # Salvar arquivo físico
-                                    template_file_path = os.path.join(custom_dir, f"{template_name}.yaml")
-                                    with open(template_file_path, 'w', encoding='utf-8') as f:
-                                        f.write(yaml_content)
-                        except Exception as e:
+            # Read file content with size limit
+            content = await file.read()
+            if len(content) > MAX_FILE_SIZE:
+                raise HTTPException(status_code=400, detail="File too large")
+            
+            with open(zip_path, "wb") as buffer:
+                buffer.write(content)
+            
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    # Check for zip bombs
+                    if len(zip_ref.namelist()) > 100:  # Limit number of files
+                        raise HTTPException(status_code=400, detail="Too many files in ZIP")
+                    
+                    zip_ref.extractall(tmpdirname)
+                    
+                    for extracted_file in zip_ref.namelist():
+                        # Prevent path traversal
+                        safe_extracted = sanitize_filename(os.path.basename(extracted_file))
+                        if not safe_extracted:
                             continue
-                db.commit()
+                            
+                        if safe_extracted.endswith(".yaml") or safe_extracted.endswith(".yml"):
+                            try:
+                                file_path = os.path.join(tmpdirname, extracted_file)
+                                
+                                # Ensure file is within temp directory
+                                if not os.path.abspath(file_path).startswith(os.path.abspath(tmpdirname)):
+                                    continue
+                                
+                                with open(file_path, 'r', encoding='utf-8') as yaml_file:
+                                    yaml_content = yaml_file.read()
+                                    
+                                    # Validate YAML content
+                                    if not validate_yaml_content(yaml_content):
+                                        continue
+                                    
+                                    template_name = safe_extracted.replace('.yaml', '').replace('.yml', '')
+                                    template_name = html.escape(template_name)
+                                    
+                                    # Salvar no banco
+                                    existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == template_name).first()
+                                    if not existing:
+                                        db_template = HawksTemplateDB(
+                                            name=template_name, 
+                                            content=yaml_content, 
+                                            enabled=True, 
+                                            order_index=0
+                                        )
+                                        db.add(db_template)
+                                        
+                                        # Salvar arquivo físico
+                                        template_file_path = os.path.join(custom_dir, f"{template_name}.yaml")
+                                        
+                                        # Verify path is safe
+                                        if os.path.abspath(template_file_path).startswith(os.path.abspath(custom_dir)):
+                                            with open(template_file_path, 'w', encoding='utf-8') as f:
+                                                f.write(yaml_content)
+                            except Exception as e:
+                                continue
+                    db.commit()
+            except zipfile.BadZipFile:
+                raise HTTPException(status_code=400, detail="Invalid ZIP file")
     
-    elif file.content_type in ["application/x-yaml", "text/yaml"] or file.filename.endswith(('.yaml', '.yml')):
+    elif file.content_type in ["application/x-yaml", "text/yaml"] or safe_filename.endswith(('.yaml', '.yml')):
         contents = await file.read()
-        yaml_content = contents.decode("utf-8")
-        template_name = file.filename.replace('.yaml', '').replace('.yml', '')
+        if len(contents) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large")
+        
+        try:
+            yaml_content = contents.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid file encoding")
+        
+        # Validate YAML content
+        if not validate_yaml_content(yaml_content):
+            raise HTTPException(status_code=400, detail="Invalid or potentially dangerous YAML content")
+        
+        template_name = safe_filename.replace('.yaml', '').replace('.yml', '')
+        template_name = html.escape(template_name)
         
         # Salvar no banco
         existing = db.query(HawksTemplateDB).filter(HawksTemplateDB.name == template_name).first()
@@ -402,8 +692,11 @@ async def upload_template(
             
             # Salvar arquivo físico
             template_file_path = os.path.join(custom_dir, f"{template_name}.yaml")
-            with open(template_file_path, 'w', encoding='utf-8') as f:
-                f.write(yaml_content)
+            
+            # Verify path is safe
+            if os.path.abspath(template_file_path).startswith(os.path.abspath(custom_dir)):
+                with open(template_file_path, 'w', encoding='utf-8') as f:
+                    f.write(yaml_content)
     
     else:
         raise HTTPException(status_code=400, detail="File type not supported")
@@ -594,24 +887,48 @@ async def upload_targets(
     if not user:
         return RedirectResponse(url="/login")
     
-    if not file.filename.endswith(('.txt', '.csv', '.list')):
+    # File validation
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    safe_filename = sanitize_filename(file.filename)
+    if not safe_filename.endswith(('.txt', '.csv', '.list')):
         raise HTTPException(status_code=400, detail="Apenas arquivos .txt, .csv ou .list são aceitos")
+    
+    # File size validation (limit to 5MB)
+    MAX_TARGETS_FILE_SIZE = 5 * 1024 * 1024
     
     try:
         contents = await file.read()
-        domains_text = contents.decode("utf-8")
+        if len(contents) > MAX_TARGETS_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+        
+        try:
+            domains_text = contents.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid file encoding")
+        
+        # Limit number of lines
+        lines = domains_text.split('\n')
+        if len(lines) > 10000:  # Limit to 10k targets
+            raise HTTPException(status_code=400, detail="Too many targets (max 10,000)")
         
         # Processar linhas do arquivo
         domains = []
-        for line in domains_text.split('\n'):
+        for line in lines:
             domain = line.strip()
             if domain and not domain.startswith('#'):  # Ignorar comentários
-                # Remover http/https se presente
-                if domain.startswith(('http://', 'https://')):
-                    domain = domain.split('://', 1)[1]
-                if '/' in domain:
-                    domain = domain.split('/')[0]
-                domains.append(domain)
+                try:
+                    # Validate and sanitize each domain
+                    clean_domain = validate_domain_input(domain)
+                    domains.append(clean_domain)
+                except ValueError:
+                    # Skip invalid domains instead of failing
+                    continue
+        
+        # Limit processed domains
+        if len(domains) > 5000:
+            domains = domains[:5000]  # Process only first 5000
         
         # Adicionar domínios únicos ao banco
         added_count = 0
@@ -625,8 +942,11 @@ async def upload_targets(
         db.commit()
         return RedirectResponse(url=f"/targets?message={added_count}_targets_added", status_code=302)
         
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Erro ao processar arquivo: {str(e)}")
+        # Don't expose internal error details
+        raise HTTPException(status_code=400, detail="Error processing file")
 
 @app.post("/targets/scan-selected")
 async def scan_selected_targets(

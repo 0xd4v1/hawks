@@ -92,14 +92,32 @@ mkdir -p templates/custom
 # Create .env file
 if [ ! -f .env ]; then
     echo "Creating .env file..."
+    
+    # Generate secure secret key
+    SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
+    
+    # Generate secure password
+    SECURE_PASSWORD=$(python3 -c "import secrets, string; chars = string.ascii_letters + string.digits + '!@#$%^&*'; print(''.join(secrets.choice(chars) for _ in range(16)))")
+    
     cat > .env << EOF
-SECRET_KEY=hawks-super-secret-key-change-in-production-$(date +%s)
+SECRET_KEY=$SECRET_KEY
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=hawks
+ADMIN_PASSWORD=$SECURE_PASSWORD
 CHAOS_API_KEY=
 DATABASE_URL=sqlite:///./hawks.db
 EOF
-    echo ".env file created. Please update passwords!"
+    echo "================================================"
+    echo "🔐 IMPORTANT SECURITY INFORMATION 🔐"
+    echo "================================================"
+    echo "Admin Username: admin"
+    echo "Admin Password: $SECURE_PASSWORD"
+    echo "================================================"
+    echo "⚠️  SAVE THESE CREDENTIALS SAFELY!"
+    echo "⚠️  Change the password after first login!"
+    echo "================================================"
+    echo ".env file created with secure credentials."
+else
+    echo ".env file already exists. Skipping creation."
 fi
 
 # Initialize database
