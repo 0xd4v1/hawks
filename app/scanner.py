@@ -89,19 +89,37 @@ class HawksScanner:
     
     async def run_subfinder(self, target: str) -> Dict:
         try:
+            print(f"SUBFINDER: Executando para target: {target}")
             subfinder_path = self._get_tool_path("subfinder")
+            print(f"SUBFINDER: Caminho do executável: {subfinder_path}")
+            
             cmd = [subfinder_path, "-d", target, "-o", "-", "-silent"]
+            print(f"SUBFINDER: Comando: {' '.join(cmd)}")
+            
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
             
+            print(f"SUBFINDER: Return code: {process.returncode}")
+            print(f"SUBFINDER: Stdout length: {len(stdout.decode())}")
+            print(f"SUBFINDER: Stderr: {stderr.decode()[:200]}...")
+            
             if process.returncode == 0:
-                subdomains = stdout.decode().strip().split('\n')
-                return {"status": "success", "subdomains": [s for s in subdomains if s]}
+                output_text = stdout.decode().strip()
+                if output_text:
+                    subdomains = [s.strip() for s in output_text.split('\n') if s.strip()]
+                    print(f"SUBFINDER: Encontrados {len(subdomains)} subdomínios")
+                    return {"status": "success", "subdomains": subdomains}
+                else:
+                    print("SUBFINDER: Nenhum subdomínio encontrado")
+                    return {"status": "success", "subdomains": []}
             else:
-                return {"status": "error", "error": stderr.decode()}
+                error_msg = stderr.decode().strip()
+                print(f"SUBFINDER: Erro - {error_msg}")
+                return {"status": "error", "error": error_msg}
         except Exception as e:
+            print(f"SUBFINDER: Exception - {str(e)}")
             return {"status": "error", "error": str(e)}
     
     async def run_chaos(self, target: str) -> Dict:
@@ -132,99 +150,157 @@ class HawksScanner:
             return {"status": "error", "error": "No subdomains to check"}
         
         try:
-            # Preparar lista de URLs válidas
-            urls_to_check = []
+            print(f"HTTPX: Verificando {len(subdomains)} subdomínios...")
+            
+            # Preparar lista de hosts (sem protocolo para httpx processar)
+            hosts_to_check = []
             for subdomain in subdomains:
                 subdomain = subdomain.strip()
                 if not subdomain:
                     continue
                     
-                # Se já tem protocolo, usar como está
+                # Remover protocolo se presente
                 if subdomain.startswith(('http://', 'https://')):
-                    urls_to_check.append(subdomain)
-                else:
-                    # Adicionar ambos os protocolos
-                    urls_to_check.append(f"https://{subdomain}")
-                    urls_to_check.append(f"http://{subdomain}")
+                    subdomain = subdomain.split('://', 1)[1]
+                
+                # Remover path se presente
+                if '/' in subdomain:
+                    subdomain = subdomain.split('/')[0]
+                
+                # Adicionar à lista se não vazio
+                if subdomain:
+                    hosts_to_check.append(subdomain)
             
-            if not urls_to_check:
-                return {"status": "error", "error": "No valid URLs to check"}
+            if not hosts_to_check:
+                return {"status": "error", "error": "No valid hosts to check"}
             
-            # Escrever URLs no arquivo temporário
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
-                for url in urls_to_check:
-                    f.write(f"{url}\n")
-                temp_file = f.name
+            print(f"HTTPX: Processando {len(hosts_to_check)} hosts...")
             
-            httpx_path = self._get_tool_path("httpx")
-            cmd = [
-                httpx_path, 
-                "-l", temp_file, 
-                "-silent", 
-                "-no-color",
-                "-timeout", "15",
-                "-retries", "1",
-                "-status-code",
-                "-follow-redirects",
-                "-mc", "200,201,202,204,301,302,303,307,308,401,403,405,429,500,502,503"
-            ]
+            # Criar arquivos temporários
+            input_file = None
+            output_file = None
             
-            process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-            
-            # Limpar arquivo temporário
             try:
-                os.unlink(temp_file)
-            except:
-                pass
-            
-            if process.returncode == 0 or process.returncode == 1:  # 1 pode ser para alguns hosts não encontrados
+                # Arquivo de entrada para httpx
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
+                    for host in hosts_to_check:
+                        f.write(f"{host}\n")
+                    input_file = f.name
+                
+                # Arquivo de saída para httpx
+                output_file = tempfile.mktemp(suffix='.txt')
+                
+                print(f"HTTPX: Input: {input_file}")
+                print(f"HTTPX: Output: {output_file}")
+                
+                httpx_path = self._get_tool_path("httpx")
+                print(f"HTTPX: Executável: {httpx_path}")
+                
+                # Comando simples: apenas httpx -silent -l input -o output
+                cmd = [
+                    httpx_path,
+                    "-silent",
+                    "-l", input_file,
+                    "-o", output_file
+                ]
+                
+                print(f"HTTPX: Comando: {' '.join(cmd)}")
+                
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=os.environ.copy()
+                )
+                stdout, stderr = await process.communicate()
+                
+                print(f"HTTPX: Return code: {process.returncode}")
+                print(f"HTTPX: Stderr: {stderr.decode()}")
+                
+                # Ler arquivo de saída
                 live_hosts = []
-                output_lines = stdout.decode().strip().split('\n')
-                
-                for line in output_lines:
-                    line = line.strip()
-                    if line and not line.startswith('[') and '://' in line:
-                        # Extrair URL da linha (pode ter status code no final)
-                        parts = line.split()
-                        if parts:
-                            url = parts[0]
-                            if url.startswith(('http://', 'https://')):
-                                live_hosts.append(url)
-                
-                # Remover duplicatas mantendo ordem
-                unique_hosts = []
-                seen = set()
-                for host in live_hosts:
-                    if host not in seen:
-                        unique_hosts.append(host)
-                        seen.add(host)
-                
-                return {"status": "success", "live_hosts": unique_hosts}
-            else:
-                error_msg = stderr.decode().strip()
-                if not error_msg:
-                    error_msg = f"HTTPX failed with return code {process.returncode}"
-                return {"status": "error", "error": error_msg}
+                if os.path.exists(output_file):
+                    with open(output_file, 'r', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        if content:
+                            live_hosts = [line.strip() for line in content.split('\n') if line.strip()]
+                    
+                    print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos")
+                    
+                    if live_hosts:
+                        # Retornar tanto os hosts quanto o caminho do arquivo
+                        return {
+                            "status": "success", 
+                            "live_hosts": live_hosts,
+                            "output_file": output_file  # Para usar no Nuclei
+                        }
+                    else:
+                        # Se não há hosts vivos, limpar arquivo e retornar erro
+                        try:
+                            os.unlink(output_file)
+                        except:
+                            pass
+                        return {"status": "error", "error": "No live hosts found"}
+                else:
+                    print("HTTPX: Arquivo de saída não foi criado")
+                    return {"status": "error", "error": "HTTPX output file not created"}
+                    
+            finally:
+                # Limpar arquivo de entrada
+                if input_file and os.path.exists(input_file):
+                    try:
+                        os.unlink(input_file)
+                    except:
+                        pass
+                # NÃO remover output_file aqui - será usado pelo Nuclei
                 
         except Exception as e:
+            print(f"HTTPX: Exception - {str(e)}")
             return {"status": "error", "error": str(e)}
     
-    async def run_nuclei(self, hosts: List[str], templates: List[str] = None) -> Dict:
-        if not hosts:
+    async def run_nuclei(self, httpx_output_file: str = None, live_hosts: List[str] = None) -> Dict:
+        if not httpx_output_file and not live_hosts:
             return {"status": "error", "error": "No hosts to scan"}
         
         try:
-            # Escrever hosts no arquivo temporário
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
-                for host in hosts:
-                    f.write(f"{host}\n")
-                hosts_file = f.name
+            print(f"NUCLEI: Iniciando scan...")
+            
+            # Usar arquivo do HTTPX se disponível, senão criar arquivo temporário
+            hosts_file = None
+            cleanup_file = False
+            
+            if httpx_output_file and os.path.exists(httpx_output_file):
+                hosts_file = httpx_output_file
+                print(f"NUCLEI: Usando arquivo do HTTPX: {hosts_file}")
+            elif live_hosts:
+                # Criar arquivo temporário se não temos arquivo do HTTPX
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
+                    for host in live_hosts:
+                        f.write(f"{host}\n")
+                    hosts_file = f.name
+                    cleanup_file = True
+                print(f"NUCLEI: Criado arquivo temporário: {hosts_file}")
+            else:
+                return {"status": "error", "error": "No valid hosts file or list"}
+            
+            # Verificar se arquivo existe e tem conteúdo
+            if not os.path.exists(hosts_file):
+                return {"status": "error", "error": "Hosts file not found"}
+            
+            with open(hosts_file, 'r') as f:
+                hosts_content = f.read().strip()
+                if not hosts_content:
+                    if cleanup_file:
+                        os.unlink(hosts_file)
+                    return {"status": "error", "error": "Hosts file is empty"}
+                hosts_count = len([line for line in hosts_content.split('\n') if line.strip()])
+                print(f"NUCLEI: Arquivo contém {hosts_count} hosts")
             
             nuclei_path = self._get_tool_path("nuclei")
-            cmd = [nuclei_path, "-l", hosts_file, "-json", "-silent", "-no-color", "-no-meta"]
+            print(f"NUCLEI: Executável: {nuclei_path}")
+            
+            # Comando básico do nuclei
+            cmd = [nuclei_path, "-l", hosts_file, "-json", "-silent", "-nc"]
             
             # Usar templates custom se disponíveis na pasta templates/custom
             custom_templates_dir = os.path.join(os.getcwd(), "templates", "custom")
@@ -232,45 +308,65 @@ class HawksScanner:
                 yaml_files = [f for f in os.listdir(custom_templates_dir) if f.endswith('.yaml') or f.endswith('.yml')]
                 if yaml_files:
                     cmd.extend(["-t", custom_templates_dir])
+                    print(f"NUCLEI: Usando {len(yaml_files)} templates custom")
                 else:
                     # Usar templates padrão se não há custom
                     cmd.extend(["-t", "~/.nuclei-templates/"])
+                    print("NUCLEI: Usando templates padrão")
             else:
                 # Usar templates padrão se pasta custom não existe ou está vazia
                 cmd.extend(["-t", "~/.nuclei-templates/"])
+                print("NUCLEI: Usando templates padrão")
+            
+            print(f"NUCLEI: Comando: {' '.join(cmd)}")
             
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd, 
+                stdout=asyncio.subprocess.PIPE, 
+                stderr=asyncio.subprocess.PIPE,
+                env=os.environ.copy()
             )
             stdout, stderr = await process.communicate()
             
-            # Limpar arquivo temporário
-            try:
-                os.unlink(hosts_file)
-            except:
-                pass
+            print(f"NUCLEI: Return code: {process.returncode}")
+            print(f"NUCLEI: Stderr: {stderr.decode()}")
             
-            if process.returncode == 0 or process.returncode == 1:  # 1 pode ser quando não há resultados
+            # Limpar arquivo temporário se foi criado por nós
+            if cleanup_file and os.path.exists(hosts_file):
+                try:
+                    os.unlink(hosts_file)
+                except:
+                    pass
+            
+            # Nuclei pode retornar 0 (sucesso) ou 1 (quando não há resultados)
+            if process.returncode in [0, 1]:
                 results = []
-                output_lines = stdout.decode().strip().split('\n')
+                output_text = stdout.decode().strip()
                 
-                for line in output_lines:
-                    line = line.strip()
-                    if line and line.startswith('{'):
-                        try:
-                            result = json.loads(line)
-                            results.append(result)
-                        except json.JSONDecodeError:
-                            continue
+                if output_text:
+                    output_lines = output_text.split('\n')
+                    print(f"NUCLEI: Processando {len(output_lines)} linhas de saída...")
+                    
+                    for line in output_lines:
+                        line = line.strip()
+                        if line and line.startswith('{'):
+                            try:
+                                result = json.loads(line)
+                                results.append(result)
+                            except json.JSONDecodeError:
+                                continue
                 
+                print(f"NUCLEI: Encontradas {len(results)} vulnerabilidades")
                 return {"status": "success", "results": results}
             else:
                 error_msg = stderr.decode().strip()
                 if not error_msg:
                     error_msg = f"Nuclei failed with return code {process.returncode}"
+                print(f"NUCLEI: Erro - {error_msg}")
                 return {"status": "error", "error": error_msg}
                 
         except Exception as e:
+            print(f"NUCLEI: Exception - {str(e)}")
             return {"status": "error", "error": str(e)}
     
     async def scan_target(self, target_id: int, target: str, db: Session):
@@ -394,7 +490,9 @@ class HawksScanner:
             
             # Nuclei - usar templates custom salvos fisicamente
             if httpx_result["status"] == "success" and not self._should_stop(scan_id):
-                nuclei_result = await self.run_nuclei(httpx_result.get("live_hosts", []))
+                # Usar arquivo de saída do HTTPX diretamente
+                httpx_output_file = httpx_result.get("output_file")
+                nuclei_result = await self.run_nuclei(httpx_output_file=httpx_output_file, live_hosts=httpx_result.get("live_hosts", []))
                 scan_result = HawksScanResult(
                     target_id=target_id,
                     scan_type="nuclei",
@@ -404,6 +502,13 @@ class HawksScanner:
                 )
                 db.add(scan_result)
                 db.commit()
+                
+                # Limpar arquivo temporário do HTTPX após uso do Nuclei
+                if httpx_output_file and os.path.exists(httpx_output_file):
+                    try:
+                        os.unlink(httpx_output_file)
+                    except:
+                        pass
             
             # Finalizar scan
             if self._should_stop(scan_id):
