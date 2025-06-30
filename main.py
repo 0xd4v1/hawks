@@ -29,6 +29,21 @@ security = HTTPBearer(auto_error=False)
 
 init_db()
 
+@app.on_event("startup")
+async def startup_event():
+    """Inicializa serviços quando a aplicação sobe"""
+    print("Hawks - Iniciando serviços...")
+    # Iniciar o processador de fila automaticamente
+    await hawks_scanner.start_queue_processor()
+    print("Hawks - Processador de fila iniciado")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Limpa recursos quando a aplicação é encerrada"""
+    print("Hawks - Encerrando serviços...")
+    await hawks_scanner.stop_queue_processor()
+    print("Hawks - Serviços encerrados")
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
@@ -613,6 +628,26 @@ async def get_queue_status(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     return hawks_scanner.get_queue_status()
+
+@app.get("/api/queue-status-detailed")
+async def get_detailed_queue_status(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    status = hawks_scanner.get_queue_status()
+    
+    # Adicionar informações dos jobs de scan
+    scan_jobs_info = {}
+    for job_id, job_data in hawks_scanner.scan_jobs.items():
+        scan_jobs_info[job_id] = {
+            "status": job_data.get("status", "unknown"),
+            "progress": job_data.get("progress", []),
+            "error": job_data.get("error")
+        }
+    
+    status["scan_jobs"] = scan_jobs_info
+    return status
 
 if __name__ == "__main__":
     import uvicorn

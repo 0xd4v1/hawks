@@ -19,19 +19,41 @@ class HawksScanner:
         self.active_scans = {}
         self.scan_lock = asyncio.Lock()
         self.queue_processor_task = None
+        self.queue_processor_running = False
     
     async def start_queue_processor(self):
         """Inicia o processador de fila de scans"""
-        if self.queue_processor_task is None:
+        if self.queue_processor_task is None and not self.queue_processor_running:
+            self.queue_processor_running = True
             self.queue_processor_task = asyncio.create_task(self._queue_processor())
+            print("Hawks Scanner - Processador de fila iniciado")
+    
+    async def stop_queue_processor(self):
+        """Para o processador de fila de scans"""
+        self.queue_processor_running = False
+        if self.queue_processor_task:
+            self.queue_processor_task.cancel()
+            try:
+                await self.queue_processor_task
+            except asyncio.CancelledError:
+                pass
+            self.queue_processor_task = None
+            print("Hawks Scanner - Processador de fila parado")
     
     async def _queue_processor(self):
         """Processador contínuo da fila de scans"""
-        while True:
+        print("Hawks Scanner - Processador de fila em execução")
+        while self.queue_processor_running:
             try:
                 # Verificar se há capacidade para novos scans
                 async with self.scan_lock:
                     has_capacity = len(self.active_scans) < hawks_config.max_concurrent_scans
+                    active_count = len(self.active_scans)
+                    queue_size = self.scan_queue.qsize()
+                
+                # Log periódico do status da fila (apenas se há atividade)
+                if active_count > 0 or queue_size > 0:
+                    print(f"Hawks Scanner - Scans ativos: {active_count}/{hawks_config.max_concurrent_scans}, Fila: {queue_size}")
                 
                 if has_capacity and not self.scan_queue.empty():
                     try:
@@ -42,16 +64,20 @@ class HawksScanner:
                         if scan_id in self.scan_jobs:
                             self.scan_jobs[scan_id]["status"] = "running"
                         
+                        print(f"Hawks Scanner - Iniciando scan do target {target_id}")
                         # Executar scan
                         asyncio.create_task(self._execute_scan(scan_data))
                     except asyncio.TimeoutError:
                         pass
                 else:
                     # Se não há capacidade ou fila vazia, aguardar mais tempo
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(5)  # Aguardar 5 segundos antes de verificar novamente
                     
+            except asyncio.CancelledError:
+                print("Hawks Scanner - Processador de fila cancelado")
+                break
             except Exception as e:
-                print(f"Erro no processador de fila: {e}")
+                print(f"Hawks Scanner - Erro no processador de fila: {e}")
                 await asyncio.sleep(2)
     
     async def _execute_scan(self, scan_data):
@@ -59,15 +85,21 @@ class HawksScanner:
         target_id, target, db = scan_data
         scan_id = f"scan_{target_id}"
         
+        print(f"Hawks Scanner - Executando scan da fila para target {target_id}: {target}")
+        
         async with self.scan_lock:
             self.active_scans[scan_id] = True
         
         try:
             await self._run_scan_pipeline(target_id, target, db)
+            print(f"Hawks Scanner - Scan concluído para target {target_id}")
+        except Exception as e:
+            print(f"Hawks Scanner - Erro no scan do target {target_id}: {e}")
         finally:
             async with self.scan_lock:
                 if scan_id in self.active_scans:
                     del self.active_scans[scan_id]
+                    print(f"Hawks Scanner - Removido target {target_id} dos scans ativos")
     
     def _get_tools_path(self) -> str:
         home_go_bin = os.path.expanduser("~/go/bin")
@@ -375,6 +407,8 @@ class HawksScanner:
         self.scan_jobs[scan_id] = {"status": "queued", "progress": []}
         self.stop_flags[scan_id] = False
         
+        print(f"Hawks Scanner - Solicitação de scan para target {target_id}: {target}")
+        
         # Verificar se pode executar imediatamente
         async with self.scan_lock:
             can_run_now = len(self.active_scans) < hawks_config.max_concurrent_scans
@@ -385,6 +419,7 @@ class HawksScanner:
                 self.active_scans[scan_id] = True
             
             self.scan_jobs[scan_id]["status"] = "running"
+            print(f"Hawks Scanner - Executando scan imediatamente para target {target_id}")
             
             # Atualizar status no banco
             from .database import HawksTarget as HawksTargetDB
@@ -397,8 +432,7 @@ class HawksScanner:
             asyncio.create_task(self._run_scan_pipeline(target_id, target, db))
         else:
             # Adicionar à fila se não pode executar agora
-            # Iniciar processador se ainda não foi iniciado
-            await self.start_queue_processor()
+            print(f"Hawks Scanner - Adicionando target {target_id} à fila (scans ativos: {len(self.active_scans)}/{hawks_config.max_concurrent_scans})")
             
             # Adicionar à fila
             await self.scan_queue.put((target_id, target, db))
@@ -420,12 +454,15 @@ class HawksScanner:
                 await self.scan_target(target_id, target_obj.domain_ip, db)
     
     def get_queue_status(self):
-        """Retorna status da fila de scans"""
+        """Retorna status detalhado da fila de scans"""
         return {
             "active_scans": len(self.active_scans),
             "queued_scans": self.scan_queue.qsize(),
             "max_concurrent": hawks_config.max_concurrent_scans,
-            "scan_threads": hawks_config.scan_threads
+            "scan_threads": hawks_config.scan_threads,
+            "queue_processor_running": self.queue_processor_running,
+            "active_scan_ids": list(self.active_scans.keys()),
+            "scan_jobs_count": len(self.scan_jobs)
         }
     
     async def _run_scan_pipeline(self, target_id: int, target: str, db: Session):

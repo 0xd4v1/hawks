@@ -68,23 +68,34 @@
 
             <!-- Status da Fila -->
             <div class="mb-6 bg-white shadow border border-gray-200 rounded-lg p-6">
-                <h3 class="text-lg font-medium text-black mb-4">Status da Fila de Scans</h3>
-                <div class="grid grid-cols-4 gap-4 text-center">
+                <h3 class="text-lg font-medium text-black mb-4">Status do Sistema de Fila</h3>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
                     <div class="bg-gray-50 p-3 rounded">
                         <div class="text-2xl font-bold text-black queue-status-active">{{ queue_status.active_scans }}</div>
                         <div class="text-sm text-gray-600">Ativos</div>
+                        <div class="text-xs text-gray-500">de {{ queue_status.max_concurrent }}</div>
                     </div>
                     <div class="bg-gray-50 p-3 rounded">
                         <div class="text-2xl font-bold text-gray-600 queue-status-queued">{{ queue_status.queued_scans }}</div>
                         <div class="text-sm text-gray-600">Na Fila</div>
+                        <div class="text-xs text-gray-500">aguardando</div>
+                    </div>
+                    <div class="bg-gray-50 p-3 rounded">
+                        <div class="text-2xl font-bold {% if queue_status.queue_processor_running %}text-green-600{% else %}text-red-600{% endif %} queue-status-processor">
+                            {% if queue_status.queue_processor_running %}✓{% else %}✗{% endif %}
+                        </div>
+                        <div class="text-sm text-gray-600">Processador</div>
+                        <div class="text-xs text-gray-500">{% if queue_status.queue_processor_running %}ativo{% else %}inativo{% endif %}</div>
                     </div>
                     <div class="bg-gray-50 p-3 rounded">
                         <div class="text-2xl font-bold text-blue-600">{{ queue_status.max_concurrent }}</div>
                         <div class="text-sm text-gray-600">Máx Simultâneos</div>
+                        <div class="text-xs text-gray-500">configurado</div>
                     </div>
                     <div class="bg-gray-50 p-3 rounded">
                         <div class="text-2xl font-bold text-green-600">{{ queue_status.scan_threads }}</div>
                         <div class="text-sm text-gray-600">Threads</div>
+                        <div class="text-xs text-gray-500">por scan</div>
                     </div>
                 </div>
             </div>
@@ -301,12 +312,22 @@
                 const response = await fetch('/api/queue-status');
                 if (response.ok) {
                     const status = await response.json();
-                    // Atualizar elementos do DOM se necessário
+                    
+                    // Atualizar elementos do DOM
                     const activeElement = document.querySelector('.queue-status-active');
                     const queuedElement = document.querySelector('.queue-status-queued');
+                    const processorElement = document.querySelector('.queue-status-processor');
                     
-                    if (activeElement) activeElement.textContent = status.active_scans;
-                    if (queuedElement) queuedElement.textContent = status.queued_scans;
+                    if (activeElement) {
+                        activeElement.textContent = status.active_scans;
+                    }
+                    if (queuedElement) {
+                        queuedElement.textContent = status.queued_scans;
+                    }
+                    if (processorElement) {
+                        processorElement.textContent = status.queue_processor_running ? '✓' : '✗';
+                        processorElement.className = `text-2xl font-bold queue-status-processor ${status.queue_processor_running ? 'text-green-600' : 'text-red-600'}`;
+                    }
                 }
             } catch (error) {
                 console.log('Erro ao atualizar status da fila:', error);
