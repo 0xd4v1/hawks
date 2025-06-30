@@ -53,7 +53,27 @@ templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 security = HTTPBearer(auto_error=False)
 
-init_db()
+# Initialize database with error handling
+try:
+    print("Hawks - Initializing database...")
+    init_db()
+    print("Hawks - Database initialized successfully")
+except Exception as e:
+    print(f"Hawks - Database initialization error: {e}")
+    print("Hawks - Attempting to create database directory and retry...")
+    
+    # Try to create the database directory and retry
+    try:
+        # Create the current directory if it doesn't exist
+        if not os.path.exists('.'):
+            os.makedirs('.', exist_ok=True)
+        
+        # Retry database initialization
+        init_db()
+        print("Hawks - Database initialized successfully on retry")
+    except Exception as retry_error:
+        print(f"Hawks - Database initialization failed on retry: {retry_error}")
+        print("Hawks - Application will continue but database operations may fail")
 
 # Security functions
 def verify_password(plain_password, hashed_password):

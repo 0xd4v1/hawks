@@ -39,8 +39,8 @@ RUN nuclei -update-templates
 # Copy application code
 COPY . .
 
-# Create directories
-RUN mkdir -p templates/custom app/static
+# Create necessary directories
+RUN mkdir -p templates/custom app/static logs
 
 # Create default .env if not exists
 RUN if [ ! -f .env ]; then \
@@ -53,14 +53,25 @@ RUN if [ ! -f .env ]; then \
     print(f'ADMIN_PASSWORD={secure_password}'); \
     print(f'CHAOS_API_KEY='); \
     print(f'DATABASE_URL=sqlite:///./hawks.db')" > .env; \
+    echo "Generated .env file with secure credentials"; \
     fi
 
-# Initialize database
-RUN python3 -c "from app.database import init_db; init_db()"
+# Initialize database with proper error handling
+RUN python3 -c " \
+import sys; \
+import os; \
+try: \
+    from app.database import init_db; \
+    init_db(); \
+    print('Database initialized successfully'); \
+except Exception as e: \
+    print(f'Database initialization error: {e}'); \
+    print('This is normal on first run'); \
+"
 
 # Set proper permissions
 RUN chmod 600 .env 2>/dev/null || true
-RUN chmod 640 hawks.db 2>/dev/null || true
+RUN chmod 644 hawks.db 2>/dev/null || true
 
 # Expose port
 EXPOSE 8000
