@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import json
@@ -41,10 +41,9 @@ RATE_LIMIT_WINDOW = 900  # 15 minutes
 app = FastAPI(title="Hawks", docs_url=None, redoc_url=None, debug=False)
 
 # Security middleware
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "*.localhost"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "https://localhost:8000"],
+    allow_origins=["*"],  # More permissive for development
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
@@ -279,8 +278,8 @@ async def login(request: Request, username: str = Form(...), password: str = For
             value=access_token, 
             httponly=True, 
             max_age=28800,  # 8 hours
-            secure=True,  # Should be True in production with HTTPS
-            samesite="strict"
+            secure=False,  # False for development (use True in production with HTTPS)
+            samesite="lax"  # More permissive for development
         )
         
         # Clear failed attempts on successful login
