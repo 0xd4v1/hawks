@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hawks - Alvos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-white">
+    <nav class="border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <h1 class="text-xl font-bold">Hawks</h1>
+                    </div>
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                        <a href="/dashboard" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Dashboard</a>
+                        <a href="/targets" class="border-black text-black inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Alvos</a>
+                        <a href="/scans" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Scans</a>
+                        <a href="/templates" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Templates</a>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <a href="/logout" class="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm font-medium">Sair</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div class="px-4 py-6 sm:px-0">
+            <div class="mb-8">
+                <h2 class="text-2xl font-bold text-black">Gerenciar Alvos</h2>
+                <p class="mt-1 text-sm text-gray-600">Adicione domínios ou IPs para reconnaissance</p>
+            </div>
+
+            <div class="mb-6 bg-white shadow border border-gray-200 rounded-lg p-6">
+                <h3 class="text-lg font-medium text-black mb-4">Adicionar Novo Alvo</h3>
+                <form action="/targets" method="POST" class="flex gap-4">
+                    <input type="text" name="domain_ip" placeholder="exemplo.com ou 192.168.1.1" required
+                           class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
+                    <button type="submit" 
+                            class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">
+                        Adicionar
+                    </button>
+                </form>
+            </div>
+
+            <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-black">Lista de Alvos</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domínio/IP</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Último Scan</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for target in targets %}
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-black">{{ target.domain_ip }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full 
+                                        {% if target.scan_status == 'pending' %}bg-gray-100 text-gray-800
+                                        {% elif target.scan_status == 'running' %}bg-gray-200 text-gray-900
+                                        {% elif target.scan_status == 'completed' %}bg-gray-100 text-black
+                                        {% else %}bg-gray-200 text-gray-600{% endif %}">
+                                        {{ target.scan_status }}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-black">
+                                    {% if target.last_scan %}
+                                        {{ target.last_scan.strftime('%d/%m/%Y %H:%M') }}
+                                    {% else %}
+                                        Nunca
+                                    {% endif %}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <button onclick="scanTarget({{ target.id }})" 
+                                            class="bg-black text-white px-3 py-1 rounded text-xs hover:bg-gray-800 mr-2">
+                                        Scan
+                                    </button>
+                                    <button onclick="deleteTarget({{ target.id }})" 
+                                            class="bg-gray-600 text-white px-3 py-1 rounded text-xs hover:bg-gray-700">
+                                        Remover
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function scanTarget(targetId) {
+            try {
+                const response = await fetch(`/targets/${targetId}/scan`, {
+                    method: 'POST'
+                });
+                if (response.ok) {
+                    alert('Scan iniciado com sucesso!');
+                    location.reload();
+                } else {
+                    alert('Erro ao iniciar scan');
+                }
+            } catch (error) {
+                alert('Erro: ' + error.message);
+            }
+        }
+
+        async function deleteTarget(targetId) {
+            if (confirm('Tem certeza que deseja remover este alvo?')) {
+                try {
+                    const response = await fetch(`/targets/${targetId}`, {
+                        method: 'DELETE'
+                    });
+                    if (response.ok) {
+                        location.reload();
+                    } else {
+                        alert('Erro ao remover alvo');
+                    }
+                } catch (error) {
+                    alert('Erro: ' + error.message);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

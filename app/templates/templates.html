@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hawks - Templates</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-white">
+    <nav class="border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex">
+                    <div class="flex-shrink-0 flex items-center">
+                        <h1 class="text-xl font-bold">Hawks</h1>
+                    </div>
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                        <a href="/dashboard" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Dashboard</a>
+                        <a href="/targets" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Alvos</a>
+                        <a href="/scans" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Scans</a>
+                        <a href="/templates" class="border-black text-black inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">Templates</a>
+                    </div>
+                </div>
+                <div class="flex items-center">
+                    <a href="/logout" class="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm font-medium">Sair</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div class="px-4 py-6 sm:px-0">
+            <div class="mb-8">
+                <h2 class="text-2xl font-bold text-black">Gerenciar Templates Nuclei</h2>
+                <p class="mt-1 text-sm text-gray-600">Upload e edição de templates YAML customizados</p>
+            </div>
+
+            <div class="mb-6 bg-white shadow border border-gray-200 rounded-lg p-6">
+                <h3 class="text-lg font-medium text-black mb-4">Adicionar Novo Template</h3>
+                <form action="/templates" method="POST" class="space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-black mb-1">Nome do Template</label>
+                            <input type="text" name="name" required
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-black mb-1">Ordem</label>
+                            <input type="number" name="order_index" value="0"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-black mb-1">Conteúdo YAML</label>
+                        <textarea name="content" rows="12" required placeholder="id: meu-template
+
+info:
+  name: Meu Template Customizado
+  author: Hawks User
+  severity: info
+
+requests:
+  - method: GET
+    path:
+      - '{{BaseURL}}'
+    matchers:
+      - type: status
+        status:
+          - 200"
+                                  class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black font-mono text-sm"></textarea>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="enabled" value="true" checked
+                                   class="rounded border-gray-300 text-black focus:ring-black">
+                            <span class="ml-2 text-sm text-black">Template ativo</span>
+                        </label>
+                        <button type="submit" 
+                                class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">
+                            Salvar Template
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-black">Upload de Templates</h3>
+                    <p class="mt-1 text-sm text-gray-600">Envie arquivos .yaml individuais ou um arquivo .zip contendo múltiplos templates</p>
+                </div>
+                <div class="p-6">
+                    <form action="/templates/upload" method="POST" enctype="multipart/form-data" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-black mb-2">Selecionar Arquivo</label>
+                            <input type="file" name="file" accept=".yaml,.yml,.zip" required
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-black focus:border-black">
+                            <p class="mt-1 text-xs text-gray-500">Formatos aceitos: .yaml, .yml, .zip</p>
+                        </div>
+                        <button type="submit" 
+                                class="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-black">
+                            Enviar Templates
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="bg-white shadow border border-gray-200 rounded-lg overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h3 class="text-lg font-medium text-black">Templates Existentes</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nome</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ordem</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Criado</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for template in templates %}
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-black">{{ template.name }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full 
+                                        {% if template.enabled %}bg-gray-100 text-black{% else %}bg-gray-200 text-gray-600{% endif %}">
+                                        {% if template.enabled %}Ativo{% else %}Inativo{% endif %}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-black">{{ template.order_index }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-black">{{ template.created_at.strftime('%d/%m/%Y') }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <button data-template-name="{{ template.name }}" data-template-content="{{ template.content | e }}" onclick="viewTemplateData(this)" 
+                                            class="bg-black text-white px-3 py-1 rounded text-xs hover:bg-gray-800 mr-2">
+                                        Ver
+                                    </button>
+                                    <button data-template-id="{{ template.id }}" onclick="deleteTemplateData(this)" 
+                                            class="bg-gray-600 text-white px-3 py-1 rounded text-xs hover:bg-gray-700">
+                                        Remover
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-black" id="modal-title">Template</h3>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+                </div>
+                <div class="mt-2">
+                    <pre id="modal-content" class="whitespace-pre-wrap text-sm bg-gray-50 p-4 rounded border max-h-96 overflow-y-auto font-mono"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function viewTemplateData(button) {
+            const name = button.getAttribute('data-template-name');
+            const content = button.getAttribute('data-template-content');
+            document.getElementById('modal-title').textContent = 'Template: ' + name;
+            document.getElementById('modal-content').textContent = content;
+            document.getElementById('modal').classList.remove('hidden');
+        }
+
+        function deleteTemplateData(button) {
+            const templateId = button.getAttribute('data-template-id');
+            if (confirm('Tem certeza que deseja remover este template?')) {
+                fetch('/templates/' + templateId, {
+                    method: 'DELETE'
+                }).then(response => {
+                    if (response.ok) {
+                        location.reload();
+                    } else {
+                        alert('Erro ao remover template');
+                    }
+                }).catch(error => {
+                    alert('Erro: ' + error.message);
+                });
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
