@@ -125,8 +125,12 @@ class HawksScanner:
             subfinder_path = self._get_tool_path("subfinder")
             print(f"SUBFINDER: Caminho do executável: {subfinder_path}")
             
-            cmd = [subfinder_path, "-d", target, "-o", "-", "-silent"]
+            # Criar arquivo temporário para salvar subdomínios
+            subfinder_output_file = tempfile.mktemp(suffix='_subfinder.txt')
+            
+            cmd = [subfinder_path, "-d", target, "-o", subfinder_output_file, "-silent"]
             print(f"SUBFINDER: Comando: {' '.join(cmd)}")
+            print(f"SUBFINDER: Arquivo de saída: {subfinder_output_file}")
             
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -134,19 +138,39 @@ class HawksScanner:
             stdout, stderr = await process.communicate()
             
             print(f"SUBFINDER: Return code: {process.returncode}")
-            print(f"SUBFINDER: Stdout length: {len(stdout.decode())}")
             print(f"SUBFINDER: Stderr: {stderr.decode()[:200]}...")
             
             if process.returncode == 0:
-                output_text = stdout.decode().strip()
-                if output_text:
-                    subdomains = [s.strip() for s in output_text.split('\n') if s.strip()]
-                    print(f"SUBFINDER: Encontrados {len(subdomains)} subdomínios")
-                    return {"status": "success", "subdomains": subdomains}
+                # Verificar se arquivo foi criado e ler conteúdo
+                if os.path.exists(subfinder_output_file):
+                    with open(subfinder_output_file, 'r', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        if content:
+                            subdomains = [s.strip() for s in content.split('\n') if s.strip()]
+                            print(f"SUBFINDER: Encontrados {len(subdomains)} subdomínios")
+                            return {
+                                "status": "success", 
+                                "subdomains": subdomains,
+                                "output_file": subfinder_output_file  # Para usar com cat | httpx
+                            }
+                        else:
+                            # Arquivo vazio, limpar
+                            try:
+                                os.unlink(subfinder_output_file)
+                            except:
+                                pass
+                            print("SUBFINDER: Nenhum subdomínio encontrado")
+                            return {"status": "success", "subdomains": []}
                 else:
-                    print("SUBFINDER: Nenhum subdomínio encontrado")
-                    return {"status": "success", "subdomains": []}
+                    print("SUBFINDER: Arquivo de saída não foi criado")
+                    return {"status": "error", "error": "Subfinder output file not created"}
             else:
+                # Limpar arquivo em caso de erro
+                if os.path.exists(subfinder_output_file):
+                    try:
+                        os.unlink(subfinder_output_file)
+                    except:
+                        pass
                 error_msg = stderr.decode().strip()
                 print(f"SUBFINDER: Erro - {error_msg}")
                 return {"status": "error", "error": error_msg}
@@ -177,14 +201,116 @@ class HawksScanner:
         except Exception as e:
             return {"status": "error", "error": str(e)}
     
-    async def run_httpx(self, subdomains: List[str]) -> Dict:
+    async def run_httpx(self, subdomains: List[str] = None, subfinder_file: str = None) -> Dict:
+        # Priorizar arquivo do subfinder se disponível
+        if subfinder_file and os.path.exists(subfinder_file):
+            return await self._run_httpx_from_file(subfinder_file)
+        elif subdomains:
+            return await self._run_httpx_from_list(subdomains)
+        else:
+            return {"status": "error", "error": "No subdomains or file provided"}
+    
+    async def _run_httpx_from_file(self, subfinder_file: str) -> Dict:
+        """Executa HTTPX usando cat arquivo | httpx -silent -o arquivo"""
+        try:
+            print(f"HTTPX: Processando arquivo do subfinder: {subfinder_file}")
+            
+            # Verificar se arquivo existe e tem conteúdo
+            if not os.path.exists(subfinder_file):
+                return {"status": "error", "error": "Subfinder file not found"}
+            
+            with open(subfinder_file, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    return {"status": "error", "error": "Subfinder file is empty"}
+                
+                subdomains_count = len([line for line in content.split('\n') if line.strip()])
+                print(f"HTTPX: Arquivo contém {subdomains_count} subdomínios")
+            
+            httpx_path = self._get_tool_path("httpx")
+            print(f"HTTPX: Executável: {httpx_path}")
+            
+            # Verificar se httpx existe
+            if not os.path.exists(httpx_path) and httpx_path == "httpx":
+                import shutil
+                httpx_path = shutil.which("httpx")
+                if not httpx_path:
+                    return {"status": "error", "error": "HTTPX not found in PATH"}
+            
+            # Criar arquivo de saída para o HTTPX
+            httpx_output_file = tempfile.mktemp(suffix='_httpx.txt')
+            
+            # Comando: cat subfinder_file | httpx -silent -o httpx_output
+            cmd = f"cat {subfinder_file} | {httpx_path} -silent -o {httpx_output_file}"
+            print(f"HTTPX: Comando: {cmd}")
+            
+            # Executar via shell para usar pipe
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=os.environ.copy()
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            print(f"HTTPX: Return code: {process.returncode}")
+            print(f"HTTPX: Stdout: {stdout.decode()[:200]}...")
+            print(f"HTTPX: Stderr: {stderr.decode()[:200]}...")
+            
+            if process.returncode == 0:
+                # Verificar se arquivo de saída foi criado
+                if os.path.exists(httpx_output_file):
+                    with open(httpx_output_file, 'r', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        if content:
+                            live_hosts = [line.strip() for line in content.split('\n') if line.strip()]
+                            print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos")
+                            
+                            # Limpar arquivo do subfinder
+                            try:
+                                os.unlink(subfinder_file)
+                            except:
+                                pass
+                            
+                            return {
+                                "status": "success", 
+                                "live_hosts": live_hosts,
+                                "output_file": httpx_output_file
+                            }
+                        else:
+                            # Arquivo vazio, limpar
+                            try:
+                                os.unlink(httpx_output_file)
+                                os.unlink(subfinder_file)
+                            except:
+                                pass
+                            return {"status": "error", "error": "No live hosts found"}
+                else:
+                    print("HTTPX: Arquivo de saída não foi criado")
+                    return {"status": "error", "error": "HTTPX output file not created"}
+            else:
+                error_msg = stderr.decode().strip()
+                if not error_msg:
+                    error_msg = f"HTTPX failed with return code {process.returncode}"
+                print(f"HTTPX: Erro - {error_msg}")
+                return {"status": "error", "error": error_msg}
+                
+        except Exception as e:
+            print(f"HTTPX: Exception - {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "error": str(e)}
+    
+    async def _run_httpx_from_list(self, subdomains: List[str]) -> Dict:
+        """Versão fallback para quando não há arquivo do subfinder"""
         if not subdomains:
             return {"status": "error", "error": "No subdomains to check"}
         
         try:
-            print(f"HTTPX: Verificando {len(subdomains)} subdomínios...")
+            print(f"HTTPX: Verificando {len(subdomains)} subdomínios (via lista)...")
             
-            # Preparar lista de hosts (sem protocolo para httpx processar)
+            # Preparar lista de hosts
             hosts_to_check = []
             for subdomain in subdomains:
                 subdomain = subdomain.strip()
@@ -199,7 +325,6 @@ class HawksScanner:
                 if '/' in subdomain:
                     subdomain = subdomain.split('/')[0]
                 
-                # Adicionar à lista se não vazio
                 if subdomain:
                     hosts_to_check.append(subdomain)
             
@@ -208,83 +333,64 @@ class HawksScanner:
             
             print(f"HTTPX: Processando {len(hosts_to_check)} hosts...")
             
-            # Criar arquivos temporários
-            input_file = None
-            output_file = None
+            httpx_path = self._get_tool_path("httpx")
+            print(f"HTTPX: Executável: {httpx_path}")
             
-            try:
-                # Arquivo de entrada para httpx
-                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8') as f:
-                    for host in hosts_to_check:
-                        f.write(f"{host}\n")
-                    input_file = f.name
-                
-                # Arquivo de saída para httpx
-                output_file = tempfile.mktemp(suffix='.txt')
-                
-                print(f"HTTPX: Input: {input_file}")
-                print(f"HTTPX: Output: {output_file}")
-                
-                httpx_path = self._get_tool_path("httpx")
-                print(f"HTTPX: Executável: {httpx_path}")
-                
-                # Comando simples: apenas httpx -silent -l input -o output
-                cmd = [
-                    httpx_path,
-                    "-silent",
-                    "-l", input_file,
-                    "-o", output_file
-                ]
-                
-                print(f"HTTPX: Comando: {' '.join(cmd)}")
-                
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=os.environ.copy()
-                )
-                stdout, stderr = await process.communicate()
-                
-                print(f"HTTPX: Return code: {process.returncode}")
-                print(f"HTTPX: Stderr: {stderr.decode()}")
-                
-                # Ler arquivo de saída
-                live_hosts = []
-                if os.path.exists(output_file):
-                    with open(output_file, 'r', encoding='utf-8') as f:
+            # Verificar se httpx existe
+            if not os.path.exists(httpx_path) and httpx_path == "httpx":
+                import shutil
+                httpx_path = shutil.which("httpx")
+                if not httpx_path:
+                    return {"status": "error", "error": "HTTPX not found in PATH"}
+            
+            # Preparar input para stdin
+            hosts_input = '\n'.join(hosts_to_check)
+            
+            # Criar arquivo de saída
+            httpx_output_file = tempfile.mktemp(suffix='_httpx.txt')
+            
+            # Comando: echo hosts | httpx -silent -o output
+            cmd = f"echo '{hosts_input}' | {httpx_path} -silent -o {httpx_output_file}"
+            print(f"HTTPX: Comando: {cmd}")
+            
+            # Executar via shell
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=os.environ.copy()
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            print(f"HTTPX: Return code: {process.returncode}")
+            print(f"HTTPX: Stdout: {stdout.decode()}")
+            print(f"HTTPX: Stderr: {stderr.decode()}")
+            
+            if process.returncode == 0:
+                if os.path.exists(httpx_output_file):
+                    with open(httpx_output_file, 'r', encoding='utf-8') as f:
                         content = f.read().strip()
                         if content:
                             live_hosts = [line.strip() for line in content.split('\n') if line.strip()]
-                    
-                    print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos")
-                    
-                    if live_hosts:
-                        # Retornar tanto os hosts quanto o caminho do arquivo
-                        return {
-                            "status": "success", 
-                            "live_hosts": live_hosts,
-                            "output_file": output_file  # Para usar no Nuclei
-                        }
-                    else:
-                        # Se não há hosts vivos, limpar arquivo e retornar erro
-                        try:
-                            os.unlink(output_file)
-                        except:
-                            pass
-                        return {"status": "error", "error": "No live hosts found"}
+                            print(f"HTTPX: Encontrados {len(live_hosts)} hosts vivos")
+                            
+                            return {
+                                "status": "success", 
+                                "live_hosts": live_hosts,
+                                "output_file": httpx_output_file
+                            }
+                        else:
+                            try:
+                                os.unlink(httpx_output_file)
+                            except:
+                                pass
+                            return {"status": "error", "error": "No live hosts found"}
                 else:
-                    print("HTTPX: Arquivo de saída não foi criado")
                     return {"status": "error", "error": "HTTPX output file not created"}
-                    
-            finally:
-                # Limpar arquivo de entrada
-                if input_file and os.path.exists(input_file):
-                    try:
-                        os.unlink(input_file)
-                    except:
-                        pass
-                # NÃO remover output_file aqui - será usado pelo Nuclei
+            else:
+                error_msg = stderr.decode().strip()
+                return {"status": "error", "error": error_msg}
                 
         except Exception as e:
             print(f"HTTPX: Exception - {str(e)}")
@@ -487,10 +593,12 @@ class HawksScanner:
             
             if self._should_stop(scan_id):
                 return
-            
+                
+            # HTTPX - usar arquivo do subfinder se disponível
+            subfinder_file = subfinder_result.get("output_file")
             all_subdomains = subfinder_result.get("subdomains", [])
             
-            # Chaos (se API key disponível)
+            # Chaos (se API key disponível) - adicionar ao arquivo do subfinder ou criar lista
             if hawks_config.chaos_api_key and not self._should_stop(scan_id):
                 chaos_result = await self.run_chaos(target)
                 scan_result = HawksScanResult(
@@ -504,14 +612,29 @@ class HawksScanner:
                 db.commit()
                 
                 if chaos_result["status"] == "success":
-                    all_subdomains.extend(chaos_result.get("subdomains", []))
-                    all_subdomains = list(set(all_subdomains))
+                    chaos_subdomains = chaos_result.get("subdomains", [])
+                    if chaos_subdomains:
+                        all_subdomains.extend(chaos_subdomains)
+                        all_subdomains = list(set(all_subdomains))
+                        
+                        # Se temos arquivo do subfinder, adicionar chaos domains ao arquivo
+                        if subfinder_file and os.path.exists(subfinder_file):
+                            with open(subfinder_file, 'a', encoding='utf-8') as f:
+                                for domain in chaos_subdomains:
+                                    if domain not in subfinder_result.get("subdomains", []):
+                                        f.write(f"\n{domain}")
+                            print(f"CHAOS: Adicionados {len(chaos_subdomains)} domínios ao arquivo do subfinder")
             
             if self._should_stop(scan_id):
                 return
                 
-            # HTTPX
-            httpx_result = await self.run_httpx(all_subdomains)
+            # HTTPX - priorizar arquivo do subfinder
+            if subfinder_file and os.path.exists(subfinder_file):
+                print("PIPELINE: Usando arquivo do subfinder para HTTPX")
+                httpx_result = await self.run_httpx(subfinder_file=subfinder_file)
+            else:
+                print("PIPELINE: Usando lista de subdomínios para HTTPX")
+                httpx_result = await self.run_httpx(subdomains=all_subdomains)
             scan_result = HawksScanResult(
                 target_id=target_id,
                 scan_type="httpx",
