@@ -29,16 +29,30 @@ class HawksScanner:
         """Processador contínuo da fila de scans"""
         while True:
             try:
-                if len(self.active_scans) < hawks_config.max_concurrent_scans:
-                    scan_data = await asyncio.wait_for(self.scan_queue.get(), timeout=1.0)
-                    asyncio.create_task(self._execute_scan(scan_data))
+                # Verificar se há capacidade para novos scans
+                async with self.scan_lock:
+                    has_capacity = len(self.active_scans) < hawks_config.max_concurrent_scans
+                
+                if has_capacity and not self.scan_queue.empty():
+                    try:
+                        scan_data = await asyncio.wait_for(self.scan_queue.get(), timeout=0.1)
+                        # Atualizar status para running antes de executar
+                        target_id = scan_data[0]
+                        scan_id = f"scan_{target_id}"
+                        if scan_id in self.scan_jobs:
+                            self.scan_jobs[scan_id]["status"] = "running"
+                        
+                        # Executar scan
+                        asyncio.create_task(self._execute_scan(scan_data))
+                    except asyncio.TimeoutError:
+                        pass
                 else:
-                    await asyncio.sleep(2)  # Aguarda se muitos scans ativos
-            except asyncio.TimeoutError:
-                await asyncio.sleep(1)
+                    # Se não há capacidade ou fila vazia, aguardar mais tempo
+                    await asyncio.sleep(3)
+                    
             except Exception as e:
                 print(f"Erro no processador de fila: {e}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
     
     async def _execute_scan(self, scan_data):
         """Executa um scan da fila"""
@@ -260,26 +274,48 @@ class HawksScanner:
             return {"status": "error", "error": str(e)}
     
     async def scan_target(self, target_id: int, target: str, db: Session):
-        """Adiciona scan à fila"""
+        """Adiciona scan à fila ou executa imediatamente se há capacidade"""
         scan_id = f"scan_{target_id}"
         self.scan_jobs[scan_id] = {"status": "queued", "progress": []}
         self.stop_flags[scan_id] = False
         
-        # Iniciar processador se ainda não foi iniciado
-        await self.start_queue_processor()
+        # Verificar se pode executar imediatamente
+        async with self.scan_lock:
+            can_run_now = len(self.active_scans) < hawks_config.max_concurrent_scans
         
-        # Adicionar à fila
-        await self.scan_queue.put((target_id, target, db))
-        
-        # Atualizar status no banco
-        from .database import HawksTarget as HawksTargetDB
-        target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
-        if target_obj:
-            target_obj.scan_status = "queued"
-            db.commit()
+        if can_run_now:
+            # Executar imediatamente
+            async with self.scan_lock:
+                self.active_scans[scan_id] = True
+            
+            self.scan_jobs[scan_id]["status"] = "running"
+            
+            # Atualizar status no banco
+            from .database import HawksTarget as HawksTargetDB
+            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+            if target_obj:
+                target_obj.scan_status = "running"
+                db.commit()
+            
+            # Executar scan diretamente
+            asyncio.create_task(self._run_scan_pipeline(target_id, target, db))
+        else:
+            # Adicionar à fila se não pode executar agora
+            # Iniciar processador se ainda não foi iniciado
+            await self.start_queue_processor()
+            
+            # Adicionar à fila
+            await self.scan_queue.put((target_id, target, db))
+            
+            # Atualizar status no banco
+            from .database import HawksTarget as HawksTargetDB
+            target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
+            if target_obj:
+                target_obj.scan_status = "queued"
+                db.commit()
     
     async def scan_multiple_targets(self, target_ids: List[int], db: Session):
-        """Adiciona múltiplos targets à fila de scan"""
+        """Adiciona múltiplos targets para scan, executando imediatamente os que puder"""
         from .database import HawksTarget as HawksTargetDB
         
         for target_id in target_ids:
@@ -382,6 +418,11 @@ class HawksScanner:
                 target_obj.scan_status = self.scan_jobs[scan_id]["status"]
                 db.commit()
             
+            # Remover da lista de scans ativos
+            async with self.scan_lock:
+                if scan_id in self.active_scans:
+                    del self.active_scans[scan_id]
+            
         except Exception as e:
             self.scan_jobs[scan_id]["status"] = "error"
             self.scan_jobs[scan_id]["error"] = str(e)
@@ -392,6 +433,11 @@ class HawksScanner:
             if target_obj:
                 target_obj.scan_status = "error"
                 db.commit()
+            
+            # Remover da lista de scans ativos
+            async with self.scan_lock:
+                if scan_id in self.active_scans:
+                    del self.active_scans[scan_id]
 
     def stop_scan(self, target_id: int):
         """Para um scan em execução"""
