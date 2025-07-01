@@ -24,7 +24,21 @@ class HawksScanner:
         
         # Configurações
         self.tools_path = self._get_tools_path()
-        self.max_concurrent = hawks_config.max_concurrent_scans
+        
+        # Otimizar número de scans concorrentes baseado nos recursos do sistema
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        memory_gb = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / (1024**3) if hasattr(os, 'sysconf') else 4
+        
+        # Calcular scans concorrentes baseado em CPU e memória
+        optimal_scans = min(
+            cpu_count,  # Máximo 1 scan por CPU
+            int(memory_gb / 2),  # Máximo 1 scan por 2GB de RAM
+            hawks_config.max_concurrent_scans  # Respeitar configuração do usuário
+        )
+        
+        self.max_concurrent = max(1, optimal_scans)  # Mínimo 1 scan
+        print(f"🔧 Sistema otimizado: {cpu_count} CPUs, {memory_gb:.1f}GB RAM, {self.max_concurrent} scans concorrentes")
 
     async def start_queue_processor(self):
         """Inicia o processador de fila"""
@@ -237,12 +251,35 @@ class HawksScanner:
             # Criar arquivo temporário para salvar subdomínios
             subfinder_output_file = tempfile.mktemp(suffix='_subfinder.txt')
             
-            cmd = [subfinder_path, "-d", target, "-o", subfinder_output_file, "-silent"]
-            print(f"SUBFINDER: Comando: {' '.join(cmd)}")
+            # Obter número de CPUs para otimização
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            
+            # Comando otimizado com máximo de threads e concorrência
+            cmd = [
+                subfinder_path, 
+                "-d", target, 
+                "-o", subfinder_output_file, 
+                "-silent",
+                "-t", str(cpu_count * 2),  # Threads = 2x CPUs
+                "-timeout", "30",  # Timeout otimizado
+                "-max-time", "300"  # Tempo máximo de execução
+            ]
+            print(f"SUBFINDER: Comando otimizado: {' '.join(cmd)}")
             print(f"SUBFINDER: Arquivo de saída: {subfinder_output_file}")
             
+            # Configurar ambiente otimizado
+            env = os.environ.copy()
+            env.update({
+                "GOMAXPROCS": str(cpu_count),
+                "SUBFINDER_THREADS": str(cpu_count * 2),
+            })
+            
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd, 
+                stdout=asyncio.subprocess.PIPE, 
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
             stdout, stderr = await process.communicate()
             
@@ -349,16 +386,28 @@ class HawksScanner:
             # Criar arquivo de saída para o HTTPX
             httpx_output_file = tempfile.mktemp(suffix='_httpx.txt')
             
-            # Comando: cat subfinder_file | httpx -silent -o httpx_output
-            cmd = f"cat {subfinder_file} | {httpx_path} -silent -o {httpx_output_file}"
-            print(f"HTTPX: Comando: {cmd}")
+            # Obter número de CPUs para otimização
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            
+            # Comando otimizado: cat subfinder_file | httpx com máximo de threads
+            cmd = f"cat {subfinder_file} | {httpx_path} -silent -o {httpx_output_file} -c {cpu_count * 2} -rate-limit 0 -timeout 10"
+            print(f"HTTPX: Comando otimizado: {cmd}")
+            
+            # Configurar ambiente otimizado
+            env = os.environ.copy()
+            env.update({
+                "GOMAXPROCS": str(cpu_count),
+                "HTTPX_THREADS": str(cpu_count * 2),
+                "HTTPX_CONCURRENCY": str(cpu_count * 2),
+            })
             
             # Executar via shell para usar pipe
             process = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy()
+                env=env
             )
             
             stdout, stderr = await process.communicate()
@@ -663,20 +712,62 @@ class HawksScanner:
             except Exception as e:
                 print(f"NUCLEI: Erro no teste de listagem: {e}")
             
-            # Múltiplas configurações para tentar
+            # Obter número de CPUs para otimização
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            print(f"NUCLEI: Sistema tem {cpu_count} CPUs disponíveis")
+            
+            # Múltiplas configurações otimizadas para máximo desempenho
             template_configs = [
-                ("custom-only", ["-t", custom_templates_dir]),
-                ("custom-only-verbose", ["-t", custom_templates_dir, "-v"]),
-                ("custom-only-no-silent", ["-t", custom_templates_dir, "-nc"]),
-                ("custom-only-basic", ["-t", custom_templates_dir, "-silent", "-nc"])
+                # Configuração principal com máximo de threads e concorrência
+                ("max-performance", [
+                    "-t", custom_templates_dir,
+                    "-c", str(cpu_count * 2),  # Concorrência = 2x CPUs
+                    "-rate-limit", "0",  # Sem limite de rate
+                    "-bulk-size", "50",  # Bulk size maior
+                    "-headless",  # Modo headless para mais velocidade
+                    "-timeout", "10"  # Timeout reduzido
+                ]),
+                # Configuração agressiva
+                ("aggressive", [
+                    "-t", custom_templates_dir,
+                    "-c", str(cpu_count * 3),  # Concorrência = 3x CPUs
+                    "-rate-limit", "0",
+                    "-bulk-size", "100",
+                    "-headless",
+                    "-timeout", "5"
+                ]),
+                # Configuração padrão otimizada
+                ("optimized", [
+                    "-t", custom_templates_dir,
+                    "-c", str(cpu_count),
+                    "-rate-limit", "0",
+                    "-bulk-size", "25"
+                ]),
+                # Configuração de fallback
+                ("fallback", ["-t", custom_templates_dir])
             ]
             
             # Adicionar configurações com templates específicos se houver apenas um template
             if len(yaml_files) == 1:
                 specific_template = os.path.join(custom_templates_dir, yaml_files[0])
                 template_configs.extend([
-                    ("specific-template", ["-t", specific_template]),
-                    ("specific-template-verbose", ["-t", specific_template, "-v"])
+                    ("specific-max-performance", [
+                        "-t", specific_template,
+                        "-c", str(cpu_count * 2),
+                        "-rate-limit", "0",
+                        "-bulk-size", "50",
+                        "-headless",
+                        "-timeout", "10"
+                    ]),
+                    ("specific-aggressive", [
+                        "-t", specific_template,
+                        "-c", str(cpu_count * 3),
+                        "-rate-limit", "0",
+                        "-bulk-size", "100",
+                        "-headless",
+                        "-timeout", "5"
+                    ])
                 ])
             
             # Tentar cada configuração até uma funcionar
@@ -690,27 +781,45 @@ class HawksScanner:
                 if template_args:
                     nuclei_cmd.extend(template_args)
                 
-                print(f"NUCLEI: Comando: {' '.join(nuclei_cmd)}")
-                
-                try:
+                                    print(f"NUCLEI: Comando: {' '.join(nuclei_cmd)}")
+                    print(f"NUCLEI: Configuração de performance: {cpu_count} CPUs, concorrência {cpu_count * 2}")
+                    
+                    # Log de início do scan
+                    start_time = datetime.now()
+                    print(f"NUCLEI: Iniciando scan em {start_time.strftime('%H:%M:%S')}")
+                    
+                    try:
                     # Executar nuclei diretamente usando o arquivo de hosts
                     process = await asyncio.create_subprocess_exec(
                         *nuclei_cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
-                        env=os.environ.copy()
+                        env=env,
+                        preexec_fn=lambda: os.nice(-10) if hasattr(os, 'nice') else None  # Alta prioridade se possível
                     )
                     
-                    # Implementar timeout reduzido para o nuclei
+                    # Configurar ambiente otimizado para máximo desempenho
+                    env = os.environ.copy()
+                    env.update({
+                        "GOMAXPROCS": str(cpu_count),  # Usar todas as CPUs
+                        "GOROUTINES": str(cpu_count * 100),  # Mais goroutines
+                        "NUCLEI_THREADS": str(cpu_count * 2),  # Threads do nuclei
+                        "NUCLEI_CONCURRENCY": str(cpu_count * 2),  # Concorrência
+                    })
+                    
+                    # Timeout otimizado baseado no número de hosts
+                    timeout_seconds = min(300, max(60, hosts_count * 2))  # 1-5 minutos baseado no número de hosts
+                    print(f"NUCLEI: Timeout configurado para {timeout_seconds} segundos")
+                    
                     try:
                         stdout, stderr = await asyncio.wait_for(
                             process.communicate(), 
-                            timeout=120  # 2 minutos - reduzido para evitar travamentos
+                            timeout=timeout_seconds
                         )
                     except asyncio.TimeoutError:
                         process.kill()
                         await process.wait()
-                        raise asyncio.TimeoutError("Nuclei timeout after 2 minutes")
+                        raise asyncio.TimeoutError(f"Nuclei timeout after {timeout_seconds} seconds")
                     
                     print(f"NUCLEI: Return code: {process.returncode}")
                     stderr_content = stderr.decode().strip()
@@ -738,7 +847,13 @@ class HawksScanner:
                                     except json.JSONDecodeError:
                                         continue
                         
+                        # Calcular tempo de execução
+                        end_time = datetime.now()
+                        execution_time = (end_time - start_time).total_seconds()
+                        hosts_per_second = hosts_count / execution_time if execution_time > 0 else 0
+                        
                         print(f"NUCLEI: Encontradas {len(results)} vulnerabilidades com configuração '{config_name}'")
+                        print(f"NUCLEI: Performance: {execution_time:.1f}s, {hosts_per_second:.1f} hosts/s, {len(results)} resultados")
                         
                         # Limpar arquivo temporário se foi criado por nós
                         if cleanup_file and os.path.exists(hosts_file):
@@ -747,7 +862,12 @@ class HawksScanner:
                             except:
                                 pass
                         
-                        return {"status": "success", "results": results, "config_used": config_name}
+                        return {"status": "success", "results": results, "config_used": config_name, "performance": {
+                            "execution_time": execution_time,
+                            "hosts_per_second": hosts_per_second,
+                            "hosts_scanned": hosts_count,
+                            "results_found": len(results)
+                        }}
                     
                     elif process.returncode == 2:
                         print(f"NUCLEI: Configuração '{config_name}' falhou com return code 2 (template não encontrado), tentando próxima...")
@@ -760,8 +880,19 @@ class HawksScanner:
                             continue
                         else:
                             # Pode ser que não há vulnerabilidades encontradas, mas o comando funcionou
+                            end_time = datetime.now()
+                            execution_time = (end_time - start_time).total_seconds()
+                            hosts_per_second = hosts_count / execution_time if execution_time > 0 else 0
+                            
                             print(f"NUCLEI: Configuração '{config_name}' executou com sucesso (return code 1 - sem vulnerabilidades)")
-                            return {"status": "success", "results": [], "config_used": config_name}
+                            print(f"NUCLEI: Performance: {execution_time:.1f}s, {hosts_per_second:.1f} hosts/s, 0 resultados")
+                            
+                            return {"status": "success", "results": [], "config_used": config_name, "performance": {
+                                "execution_time": execution_time,
+                                "hosts_per_second": hosts_per_second,
+                                "hosts_scanned": hosts_count,
+                                "results_found": 0
+                            }}
                     
                     else:
                         print(f"NUCLEI: Configuração '{config_name}' falhou com return code {process.returncode}")
