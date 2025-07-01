@@ -781,14 +781,27 @@ class HawksScanner:
                 if template_args:
                     nuclei_cmd.extend(template_args)
                 
-                                    print(f"NUCLEI: Comando: {' '.join(nuclei_cmd)}")
-                    print(f"NUCLEI: Configuração de performance: {cpu_count} CPUs, concorrência {cpu_count * 2}")
-                    
-                    # Log de início do scan
-                    start_time = datetime.now()
-                    print(f"NUCLEI: Iniciando scan em {start_time.strftime('%H:%M:%S')}")
-                    
-                    try:
+                print(f"NUCLEI: Comando: {' '.join(nuclei_cmd)}")
+                print(f"NUCLEI: Configuração de performance: {cpu_count} CPUs, concorrência {cpu_count * 2}")
+                
+                # Log de início do scan
+                start_time = datetime.now()
+                print(f"NUCLEI: Iniciando scan em {start_time.strftime('%H:%M:%S')}")
+                
+                # Configurar ambiente otimizado para máximo desempenho
+                env = os.environ.copy()
+                env.update({
+                    "GOMAXPROCS": str(cpu_count),  # Usar todas as CPUs
+                    "GOROUTINES": str(cpu_count * 100),  # Mais goroutines
+                    "NUCLEI_THREADS": str(cpu_count * 2),  # Threads do nuclei
+                    "NUCLEI_CONCURRENCY": str(cpu_count * 2),  # Concorrência
+                })
+                
+                # Timeout otimizado baseado no número de hosts
+                timeout_seconds = min(300, max(60, hosts_count * 2))  # 1-5 minutos baseado no número de hosts
+                print(f"NUCLEI: Timeout configurado para {timeout_seconds} segundos")
+                
+                try:
                     # Executar nuclei diretamente usando o arquivo de hosts
                     process = await asyncio.create_subprocess_exec(
                         *nuclei_cmd,
@@ -797,19 +810,6 @@ class HawksScanner:
                         env=env,
                         preexec_fn=lambda: os.nice(-10) if hasattr(os, 'nice') else None  # Alta prioridade se possível
                     )
-                    
-                    # Configurar ambiente otimizado para máximo desempenho
-                    env = os.environ.copy()
-                    env.update({
-                        "GOMAXPROCS": str(cpu_count),  # Usar todas as CPUs
-                        "GOROUTINES": str(cpu_count * 100),  # Mais goroutines
-                        "NUCLEI_THREADS": str(cpu_count * 2),  # Threads do nuclei
-                        "NUCLEI_CONCURRENCY": str(cpu_count * 2),  # Concorrência
-                    })
-                    
-                    # Timeout otimizado baseado no número de hosts
-                    timeout_seconds = min(300, max(60, hosts_count * 2))  # 1-5 minutos baseado no número de hosts
-                    print(f"NUCLEI: Timeout configurado para {timeout_seconds} segundos")
                     
                     try:
                         stdout, stderr = await asyncio.wait_for(
