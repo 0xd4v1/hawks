@@ -194,15 +194,38 @@ class HawksScanner:
         return ""
     
     def _get_tool_path(self, tool_name: str) -> str:
+        # Primeiro verificar no diretório de ferramentas configurado
         if self.tools_path:
             tool_path = os.path.join(self.tools_path, tool_name)
             if os.path.exists(tool_path):
                 return tool_path
         
-        system_path = shutil.which(tool_name)
-        if system_path:
-            return system_path
+        # Verificar caminhos comuns onde as ferramentas podem estar instaladas
+        common_paths = [
+            "/usr/local/bin",
+            "/usr/bin", 
+            "/bin",
+            "/opt/go/bin",
+            os.path.expanduser("~/go/bin"),
+            os.path.expanduser("~/.local/bin"),
+            os.path.expanduser("~/bin")
+        ]
         
+        for path in common_paths:
+            tool_path = os.path.join(path, tool_name)
+            if os.path.exists(tool_path) and os.access(tool_path, os.X_OK):
+                return tool_path
+        
+        # Se não encontrar, tentar usar shutil.which como fallback
+        try:
+            import shutil
+            system_path = shutil.which(tool_name)
+            if system_path:
+                return system_path
+        except:
+            pass
+        
+        # Se nada funcionar, retornar o nome da ferramenta (pode funcionar se estiver no PATH)
         return tool_name
     
     async def run_subfinder(self, target: str) -> Dict:
@@ -573,12 +596,26 @@ class HawksScanner:
             nuclei_path = self._get_tool_path("nuclei")
             print(f"NUCLEI: Executável: {nuclei_path}")
             
-            # Verificar se nuclei existe
-            if not os.path.exists(nuclei_path) and nuclei_path == "nuclei":
-                import shutil
-                nuclei_path = shutil.which("nuclei")
-                if not nuclei_path:
-                    return {"status": "error", "error": "NUCLEI not found in PATH"}
+            # Verificar se nuclei existe e é executável
+            if not os.path.exists(nuclei_path):
+                return {"status": "error", "error": f"NUCLEI not found at: {nuclei_path}"}
+            
+            if not os.access(nuclei_path, os.X_OK):
+                return {"status": "error", "error": f"NUCLEI not executable at: {nuclei_path}"}
+            
+            # Testar se o nuclei funciona executando --version
+            try:
+                test_process = await asyncio.create_subprocess_exec(
+                    nuclei_path, "--version",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                test_stdout, test_stderr = await asyncio.wait_for(test_process.communicate(), timeout=10)
+                if test_process.returncode != 0:
+                    return {"status": "error", "error": f"NUCLEI test failed: {test_stderr.decode()}"}
+                print(f"NUCLEI: Version test passed - {test_stdout.decode().strip()}")
+            except Exception as e:
+                return {"status": "error", "error": f"NUCLEI test failed: {str(e)}"}
             
             # Usar APENAS templates custom
             custom_templates_dir = os.path.join(os.getcwd(), "templates", "custom")
@@ -598,14 +635,20 @@ class HawksScanner:
                 print("NUCLEI: Adicione templates .yaml na pasta ./templates/custom/ para executar scans")
                 return {"status": "error", "error": "No templates found in ./templates/custom/"}
             
-            template_configs = [("custom-only", ["-t", custom_templates_dir])]
+            # Múltiplas configurações para tentar
+            template_configs = [
+                ("custom-only", ["-t", custom_templates_dir]),
+                ("custom-only-verbose", ["-t", custom_templates_dir, "-v"]),
+                ("custom-only-no-silent", ["-t", custom_templates_dir, "-nc"]),
+                ("custom-only-basic", ["-t", custom_templates_dir, "-silent", "-nc"])
+            ]
             
             # Tentar cada configuração até uma funcionar
             for config_name, template_args in template_configs:
                 print(f"NUCLEI: Tentando configuração '{config_name}'...")
                 
                 # Montar comando nuclei
-                nuclei_cmd = [nuclei_path, "-jsonl", "-silent", "-nc", "-l", hosts_file]
+                nuclei_cmd = [nuclei_path, "-jsonl", "-l", hosts_file]
                 
                 # Adicionar templates se especificados
                 if template_args:
