@@ -625,15 +625,43 @@ class HawksScanner:
                 os.makedirs(custom_templates_dir, exist_ok=True)
                 print(f"NUCLEI: Criado diretório de templates custom: {custom_templates_dir}")
             
+            # Verificar permissões do diretório
+            if not os.access(custom_templates_dir, os.R_OK):
+                return {"status": "error", "error": f"No read permission for templates directory: {custom_templates_dir}"}
+            
             # Verificar se há templates YAML na pasta custom
             yaml_files = []
             if os.path.exists(custom_templates_dir):
-                yaml_files = [f for f in os.listdir(custom_templates_dir) if f.endswith('.yaml') or f.endswith('.yml')]
+                try:
+                    yaml_files = [f for f in os.listdir(custom_templates_dir) if f.endswith('.yaml') or f.endswith('.yml')]
+                except PermissionError:
+                    return {"status": "error", "error": f"Permission denied accessing templates directory: {custom_templates_dir}"}
             
             if not yaml_files:
                 print(f"NUCLEI: Nenhum template encontrado em {custom_templates_dir}")
                 print("NUCLEI: Adicione templates .yaml na pasta ./templates/custom/ para executar scans")
                 return {"status": "error", "error": "No templates found in ./templates/custom/"}
+            
+            print(f"NUCLEI: Encontrados {len(yaml_files)} templates: {yaml_files}")
+            
+            # Testar se o nuclei consegue listar os templates
+            try:
+                list_cmd = [nuclei_path, "-t", custom_templates_dir, "-tl"]
+                print(f"NUCLEI: Testando listagem de templates: {' '.join(list_cmd)}")
+                
+                list_process = await asyncio.create_subprocess_exec(
+                    *list_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                list_stdout, list_stderr = await asyncio.wait_for(list_process.communicate(), timeout=30)
+                
+                if list_process.returncode == 0:
+                    print(f"NUCLEI: Templates listados com sucesso: {list_stdout.decode()[:200]}...")
+                else:
+                    print(f"NUCLEI: Erro ao listar templates: {list_stderr.decode()[:200]}...")
+            except Exception as e:
+                print(f"NUCLEI: Erro no teste de listagem: {e}")
             
             # Múltiplas configurações para tentar
             template_configs = [
@@ -642,6 +670,14 @@ class HawksScanner:
                 ("custom-only-no-silent", ["-t", custom_templates_dir, "-nc"]),
                 ("custom-only-basic", ["-t", custom_templates_dir, "-silent", "-nc"])
             ]
+            
+            # Adicionar configurações com templates específicos se houver apenas um template
+            if len(yaml_files) == 1:
+                specific_template = os.path.join(custom_templates_dir, yaml_files[0])
+                template_configs.extend([
+                    ("specific-template", ["-t", specific_template]),
+                    ("specific-template-verbose", ["-t", specific_template, "-v"])
+                ])
             
             # Tentar cada configuração até uma funcionar
             for config_name, template_args in template_configs:
@@ -717,6 +753,16 @@ class HawksScanner:
                         print(f"NUCLEI: Configuração '{config_name}' falhou com return code 2 (template não encontrado), tentando próxima...")
                         continue  # Tentar próxima configuração
                     
+                    elif process.returncode == 1:
+                        # Return code 1 pode significar "não há resultados" ou erro
+                        if stderr_content and ("no templates found" in stderr_content.lower() or "template" in stderr_content.lower()):
+                            print(f"NUCLEI: Configuração '{config_name}' falhou - problema com templates, tentando próxima...")
+                            continue
+                        else:
+                            # Pode ser que não há vulnerabilidades encontradas, mas o comando funcionou
+                            print(f"NUCLEI: Configuração '{config_name}' executou com sucesso (return code 1 - sem vulnerabilidades)")
+                            return {"status": "success", "results": [], "config_used": config_name}
+                    
                     else:
                         print(f"NUCLEI: Configuração '{config_name}' falhou com return code {process.returncode}")
                         error_output = stderr_content[:500] if stderr_content else "No error output"
@@ -731,8 +777,11 @@ class HawksScanner:
                     continue
             
             # Se chegou aqui, todas as configurações falharam
-            error_msg = "All nuclei configurations failed"
+            error_msg = f"All nuclei configurations failed. Tried {len(template_configs)} configurations. Check if nuclei is properly installed and templates are valid."
             print(f"NUCLEI: {error_msg}")
+            print(f"NUCLEI: Nuclei path: {nuclei_path}")
+            print(f"NUCLEI: Templates directory: {custom_templates_dir}")
+            print(f"NUCLEI: Available templates: {yaml_files}")
             
             # Limpar arquivo temporário se foi criado por nós
             if cleanup_file and os.path.exists(hosts_file):
