@@ -7,7 +7,7 @@ import shutil
 from typing import List, Dict, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
-from .database import HawksScanResult, HawksTemplate
+from .database import HawksScanResult, HawksTemplate, HawksSettings as HawksSettingsDB, SessionLocal
 from .config import hawks_config
 
 class HawksScanner:
@@ -324,17 +324,16 @@ class HawksScanner:
             print(f"SUBFINDER: Exception - {str(e)}")
             return {"status": "error", "error": str(e)}
     
-    async def run_chaos(self, target: str) -> Dict:
-        if not hawks_config.chaos_api_key:
-            return {"status": "skipped", "reason": "No API key"}
+    async def run_chaos(self, target: str, api_key: str) -> Dict:
+        if not api_key:
+            return {"status": "skipped", "reason": "No API key provided"}
         
         try:
             chaos_path = self._get_tool_path("chaos")
-            cmd = [chaos_path, "-d", target, "-key", hawks_config.chaos_api_key, "-o", "-", "-silent"]
-            env = os.environ.copy()
+            cmd = [chaos_path, "-d", target, "-key", api_key, "-silent"]
             
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
             
@@ -936,9 +935,17 @@ class HawksScanner:
             self.scan_jobs[scan_id]["progress"] = []
         
         # Criar nova sessão de banco para este scan
-        from .database import SessionLocal, HawksTarget as HawksTargetDB
+        from .database import HawksTarget as HawksTargetDB
         db = SessionLocal()
         
+        # Obter configurações do banco de dados
+        settings = db.query(HawksSettingsDB).filter(HawksSettingsDB.id == 1).first()
+        if not settings:
+            settings = HawksSettingsDB(id=1) # Criar com padrões
+            db.add(settings)
+            db.commit()
+            db.refresh(settings)
+
         try:
             # Atualizar status no banco
             target_obj = db.query(HawksTargetDB).filter(HawksTargetDB.id == target_id).first()
@@ -972,9 +979,9 @@ class HawksScanner:
             subfinder_file = subfinder_result.get("output_file")
             all_subdomains = subfinder_result.get("subdomains", [])
             
-            # Chaos (se API key disponível) - adicionar ao arquivo do subfinder ou criar lista
-            if hawks_config.chaos_api_key and not self._should_stop(scan_id):
-                chaos_result = await self.run_chaos(target)
+            # Chaos (se API key disponível e ativado)
+            if settings and settings.chaos_enabled and settings.chaos_api_key and not self._should_stop(scan_id):
+                chaos_result = await self.run_chaos(target, settings.chaos_api_key)
                 scan_result = HawksScanResult(
                     target_id=target_id,
                     scan_type="chaos",

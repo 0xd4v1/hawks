@@ -41,6 +41,13 @@ class HawksScanResult(Base):
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
+class HawksSettings(Base):
+    __tablename__ = "settings"
+    
+    id = Column(Integer, primary_key=True, default=1)
+    chaos_api_key = Column(String, nullable=True)
+    chaos_enabled = Column(Boolean, default=False)
+
 def get_db():
     db = SessionLocal()
     try:

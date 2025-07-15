@@ -25,8 +25,8 @@ from typing import List, Optional
 from passlib.context import CryptContext
 import html
 
-from app.database import get_db, init_db, HawksTarget as HawksTargetDB, HawksTemplate as HawksTemplateDB, HawksScanResult
-from app.schemas import HawksTargetCreate, HawksTarget, HawksTemplateCreate, HawksTemplate, HawksLoginRequest
+from app.database import get_db, init_db, HawksTarget as HawksTargetDB, HawksTemplate as HawksTemplateDB, HawksScanResult, HawksSettings as HawksSettingsDB
+from app.schemas import HawksTargetCreate, HawksTarget, HawksTemplateCreate, HawksTemplate, HawksLoginRequest, HawksSettings
 from app.scanner import hawks_scanner
 from app.config import hawks_config
 
@@ -83,6 +83,16 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     """Hash a password"""
     return pwd_context.hash(password)
+
+def get_or_create_settings(db: Session) -> HawksSettingsDB:
+    """Obtém as configurações do banco de dados, criando se não existirem."""
+    settings = db.query(HawksSettingsDB).filter(HawksSettingsDB.id == 1).first()
+    if not settings:
+        settings = HawksSettingsDB(id=1, chaos_api_key="", chaos_enabled=False)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
 
 def is_rate_limited(ip_address: str) -> bool:
     """Check if IP is rate limited"""
@@ -314,9 +324,40 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
 @app.get("/logout")
 async def logout():
-    response = RedirectResponse(url="/login")
+    response = RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     response.delete_cookie("access_token")
     return response
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, db: Session = Depends(get_db)):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    
+    settings = get_or_create_settings(db)
+    return templates.TemplateResponse("settings.html", {"request": request, "settings": settings, "message": None})
+
+@app.post("/settings")
+async def update_settings(
+    request: Request,
+    db: Session = Depends(get_db),
+    chaos_api_key: str = Form(""),
+    chaos_enabled: bool = Form(False)
+):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    settings = get_or_create_settings(db)
+    settings.chaos_api_key = chaos_api_key
+    settings.chaos_enabled = chaos_enabled
+    db.commit()
+    
+    return templates.TemplateResponse("settings.html", {
+        "request": request,
+        "settings": settings,
+        "message": "Configurações salvas com sucesso!"
+    })
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request, db: Session = Depends(get_db)):

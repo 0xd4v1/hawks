@@ -103,7 +103,6 @@ if [ ! -f .env ]; then
 SECRET_KEY=$SECRET_KEY
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=$SECURE_PASSWORD
-CHAOS_API_KEY=
 DATABASE_URL=sqlite:///./hawks.db
 EOF
     echo "================================================"

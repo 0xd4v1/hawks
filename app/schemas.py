@@ -51,3 +51,17 @@ class HawksScanResult(HawksScanResultBase):
 class HawksLoginRequest(BaseModel):
     username: str
     password: str
+
+
+class HawksSettingsBase(BaseModel):
+    chaos_api_key: Optional[str] = None
+    chaos_enabled: bool = False
+
+class HawksSettingsCreate(HawksSettingsBase):
+    pass
+
+class HawksSettings(HawksSettingsBase):
+    id: int
+
+    class Config:
+        from_attributes = True
