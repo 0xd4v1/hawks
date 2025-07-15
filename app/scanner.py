@@ -330,9 +330,8 @@ class HawksScanner:
         
         try:
             chaos_path = self._get_tool_path("chaos")
-            cmd = [chaos_path, "-d", target, "-o", "-", "-silent"]
+            cmd = [chaos_path, "-d", target, "-key", hawks_config.chaos_api_key, "-o", "-", "-silent"]
             env = os.environ.copy()
-            env["CHAOS_API_KEY"] = hawks_config.chaos_api_key
             
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
