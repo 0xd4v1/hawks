@@ -10,5 +10,6 @@ class HawksSettings(BaseSettings):
     
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 hawks_config = HawksSettings()
